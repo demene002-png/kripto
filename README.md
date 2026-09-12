@@ -41,3 +41,11 @@ The cloud PAPER100 runner now validates Binance responses and automatically fall
 - Portföy K/Z ve düşük fiyatlı coin gösterimi daha hassas hale getirildi.
 - Gerçekleşmemiş K/Z ve son fiyat güncelleme saati eklendi.
 - Stablecoin/stable benzeri USDT pariteleri otomatik işlem evreninden çıkarıldı (USD1 dahil).
+
+
+## v1.3.6 — Manuel satış güvenilirliği
+- Otomatik tarama evreninden çıkarılan stablecoin/legacy açık pozisyonların manuel satış yolu açık tutulur.
+- Açık pozisyon tarama listesinde yoksa Binance public Spot'tan doğrudan taze bid/last fiyatı alınır.
+- Açık pozisyon fiyatları, otomatik alım filtresinden bağımsız olarak portföy görünümüne eklenir.
+- `Sat` butonu işlem sırasında `Satılıyor…` durumu gösterir ve çift tıklamayı engeller.
+- Risk azaltıcı manuel SELL, stablecoin filtresi nedeniyle hiçbir zaman engellenmemelidir.

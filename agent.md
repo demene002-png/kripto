@@ -533,3 +533,11 @@ Kritik proje kararı:
 - Otomatik işlem evreninden stablecoin/stable benzeri taban varlıklar çıkarılır: USDC, FDUSD, TUSD, USDP, DAI, BUSD, USD1, USDE, USDS, PYUSD, GUSD, USDD, FRAX, LUSD, USD0, USTC ve USDT.
 - Bu filtre hem frontend Top-50 piyasa listesinde hem Vercel cloud runner seçiminde uygulanır; sistem bu varlıklarda yeni otomatik PAPER alış açmaz.
 - Filtre mevcut açık stablecoin PAPER pozisyonunu zorla kapatmaz. Kullanıcı `Sat` düğmesiyle manuel kapatabilir; böylece test portföyünde beklenmedik otomatik tasfiye yapılmaz.
+
+
+## v1.3.6 — Manuel satış güvenilirliği
+- Otomatik tarama evreninden çıkarılan stablecoin/legacy açık pozisyonların manuel satış yolu açık tutulur.
+- Açık pozisyon tarama listesinde yoksa Binance public Spot'tan doğrudan taze bid/last fiyatı alınır.
+- Açık pozisyon fiyatları, otomatik alım filtresinden bağımsız olarak portföy görünümüne eklenir.
+- `Sat` butonu işlem sırasında `Satılıyor…` durumu gösterir ve çift tıklamayı engeller.
+- Risk azaltıcı manuel SELL, stablecoin filtresi nedeniyle hiçbir zaman engellenmemelidir.

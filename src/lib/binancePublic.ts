@@ -52,3 +52,50 @@ export async function fetchKlines(symbol:string, interval='1h', limit=48){
   const rows:any[]=await r.json();
   return rows.map(x=>({time:Number(x[0]),open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4]),volume:Number(x[5])}));
 }
+
+const PRICE_BASES = [
+  'https://data-api.binance.vision',
+  'https://api.binance.com',
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+];
+
+async function fetchJsonWithFallback(path:string){
+  let lastError:unknown=null;
+  for(const base of PRICE_BASES){
+    try{
+      const controller=new AbortController();
+      const timer=setTimeout(()=>controller.abort(),4000);
+      const r=await fetch(`${base}${path}`,{cache:'no-store',signal:controller.signal});
+      clearTimeout(timer);
+      if(!r.ok){lastError=new Error(`HTTP ${r.status}`);continue;}
+      return await r.json();
+    }catch(e){lastError=e;}
+  }
+  throw lastError instanceof Error?lastError:new Error('Binance fiyat verisine ulaşılamıyor');
+}
+
+/**
+ * Returns a live public Binance Spot quote for any existing position pair.
+ * This deliberately does NOT apply the auto-scan eligibility/stablecoin filter,
+ * because risk-reducing manual exits must remain possible for legacy positions.
+ */
+export async function fetchSpotTicker(symbol:string):Promise<CoinData>{
+  const pair=symbol.endsWith('USDT')?symbol:`${symbol}USDT`;
+  const base=baseAsset(pair);
+  const [book,ticker]=await Promise.all([
+    fetchJsonWithFallback(`/api/v3/ticker/bookTicker?symbol=${encodeURIComponent(pair)}`),
+    fetchJsonWithFallback(`/api/v3/ticker/24hr?symbol=${encodeURIComponent(pair)}`),
+  ]);
+  const bid=Number(book?.bidPrice||0), ask=Number(book?.askPrice||0), price=Number(ticker?.lastPrice||0);
+  if(!(price>0)) throw new Error(`${pair} için güncel Binance fiyatı alınamadı`);
+  const spread=bid>0&&ask>0?((ask-bid)/((ask+bid)/2))*100:0;
+  return {
+    symbol:base,pair,name:base,price,
+    change24h:Number(ticker?.priceChangePercent||0),
+    volume:formatVolume(Number(ticker?.quoteVolume||0)),
+    quoteVolume:Number(ticker?.quoteVolume||0),
+    bidPrice:bid,askPrice:ask,spreadPercent:spread,
+  } as CoinData;
+}

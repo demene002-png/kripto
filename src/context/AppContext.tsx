@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { AppState, CoinData, TradeSignal, MarketRegime, NewsIntelligence } from '../types';
-import { fetchTopUsdtMarkets } from '../lib/binancePublic';
+import { fetchTopUsdtMarkets, fetchSpotTicker } from '../lib/binancePublic';
 import { loadPaperState, mapSettingsToState, saveSettings, insertSignal, paperBuy, paperSellAll } from '../lib/cloudData';
 
 interface AppContextType {
@@ -73,7 +73,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if(settingsSaveTimerRef.current)clearTimeout(settingsSaveTimerRef.current);
     settingsSaveTimerRef.current=setTimeout(()=>{void flushPendingSettings()},350);
   };
-  const fetchMarketData=async()=>{setIsRefreshingMarket(true);try{setMarketData(await fetchTopUsdtMarkets(50))}catch(e){console.error('Binance genel piyasa verisi hatası',e)}finally{setIsRefreshingMarket(false)}};
+  const fetchMarketData=async()=>{
+    setIsRefreshingMarket(true);
+    try{
+      const top=await fetchTopUsdtMarkets(50);
+      // Açık pozisyonlar (ör. filtreye sonradan alınmış bir stablecoin) tarama evreninden
+      // çıkarılmış olsa bile fiyatları ve manuel satış yolu canlı kalmalıdır.
+      const topPairs=new Set(top.map(x=>x.pair||`${x.symbol}USDT`));
+      const missingPairs=state.portfolio
+        .map(p=>p.symbol.endsWith('USDT')?p.symbol:`${p.symbol}USDT`)
+        .filter(pair=>!topPairs.has(pair));
+      const extras=(await Promise.all(missingPairs.map(async pair=>{
+        try{return await fetchSpotTicker(pair)}catch(e){console.warn(`${pair} açık pozisyon fiyatı alınamadı`,e);return null}
+      }))).filter(Boolean) as CoinData[];
+      setMarketData([...top,...extras]);
+    }catch(e){console.error('Binance genel piyasa verisi hatası',e)}finally{setIsRefreshingMarket(false)}
+  };
 
   const forceSignalCheck=async(symbol:string)=>{
     const coin=marketData.find(c=>c.symbol===symbol);if(!coin)return;
@@ -98,8 +113,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(()=>{fetchMarketData();const i=setInterval(fetchMarketData,15000);return()=>clearInterval(i)},[]);
 
   const executeManualTrade=async(type:'BUY'|'SELL',symbol:string,amountUSD:number)=>{
-    const coin=marketData.find(c=>c.symbol===symbol);if(!coin)throw new Error('Güncel Binance fiyatı yok');
+    const pair=symbol.endsWith('USDT')?symbol:`${symbol}USDT`;
+    const base=pair.slice(0,-4);
+    let coin=marketData.find(c=>c.pair===pair || c.symbol===base || c.symbol===symbol);
     try{
+      // Manual SELL must work even if the asset is excluded from the scanner (stablecoin etc.).
+      // Fetch a fresh public quote directly when it is missing from the scanner universe.
+      if(!coin) coin=await fetchSpotTicker(pair);
       if(type==='BUY'){
         if(state.safeMode) throw new Error('Güvenli mod aktif. Yeni sanal alışlar kilitli.');
         if(state.portfolio.length>=state.maxPositions && !state.portfolio.some(p=>p.symbol===symbol)) throw new Error('Maksimum açık pozisyon sayısına ulaşıldı.');
@@ -113,7 +133,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
   const approveSignal=async(id:string,investmentAmount:number)=>{const s=signals.find(x=>x.id===id);if(s?.type==='BUY')await executeManualTrade('BUY',s.symbol,investmentAmount)};
   const rejectSignal=async(id:string)=>{setSignals(prev=>prev.map(s=>s.id===id?{...s,status:'REJECTED'}:s))};
-  const openTradeModal=(symbol:string)=>{const coin=marketData.find(c=>c.symbol===symbol);if(coin)setTradingModal({isOpen:true,coin})};
+  const openTradeModal=(symbol:string)=>{const pair=symbol.endsWith('USDT')?symbol:`${symbol}USDT`;const base=pair.slice(0,-4);const coin=marketData.find(c=>c.pair===pair||c.symbol===base||c.symbol===symbol);if(coin)setTradingModal({isOpen:true,coin})};
   const closeTradeModal=()=>setTradingModal({isOpen:false,coin:null});
   const closePosition=async(symbol:string)=>executeManualTrade('SELL',symbol,0);
   const toggleFavorite=(symbol:string)=>setState(s=>({...s,favorites:s.favorites.includes(symbol)?s.favorites.filter(f=>f!==symbol):[...s.favorites,symbol]}));
