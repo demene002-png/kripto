@@ -1,17 +1,524 @@
 import { createClient } from '@supabase/supabase-js';
-const U=process.env.SUPABASE_URL||process.env.VITE_SUPABASE_URL, K=process.env.SUPABASE_SECRET_KEY;
-const clamp=(n,a,b)=>Math.max(a,Math.min(b,n)); const ema=(a,p)=>{let e=a[0],k=2/(p+1);for(const x of a)e=x*k+e*(1-k);return e};
-const rsi=a=>{let g=0,l=0;for(let i=a.length-14;i<a.length;i++){let d=a[i]-a[i-1];if(d>0)g+=d;else l-=d}return l?100-(100/(1+g/l)):70};
-async function kl(sym,intv){let r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${intv}&limit=60`);if(!r.ok)throw Error('kline');return (await r.json()).map(x=>({c:+x[4],h:+x[2],l:+x[3],v:+x[5]}))}
-function score(k){let c=k.map(x=>x.c), last=c.at(-1), e9=ema(c,9),e21=ema(c,21),e50=ema(c,50),R=rsi(c),mom=(last/c.at(-6)-1)*100,atr=k.slice(-14).reduce((s,x)=>s+(x.h-x.l),0)/14/last*100,vr=k.at(-1).v/(k.slice(-21,-1).reduce((s,x)=>s+x.v,0)/20||1);let opp=50+(e9>e21?10:-8)+(e21>e50?10:-8)+clamp(mom*3,-12,12)+(R>48&&R<68?8:R>75?-8:0)+clamp((vr-1)*8,-5,8);let risk=28+atr*6+(R>75?12:0)+(e9<e21?8:0);let conf=58+(e9>e21&&e21>e50?14:0)+(vr>1.1?8:0)-Math.min(12,atr*2);return {opp:Math.round(clamp(opp,0,100)),risk:Math.round(clamp(risk,0,100)),conf:Math.round(clamp(conf,0,100)),atr}}
-export default async function handler(req,res){
- if(!U||!K)return res.status(500).json({error:'SUPABASE_SECRET_KEY eksik'}); const sb=createClient(U,K,{auth:{persistSession:false}}); let {data:claim,error:ce}=await sb.rpc('claim_paper_runner'); if(ce)return res.status(500).json({error:ce.message}); if(!claim?.claimed)return res.status(200).json({ok:true,skipped:true});
- let tr=await fetch('https://api.binance.com/api/v3/ticker/24hr').then(r=>r.json()); let all=tr.filter(x=>x.symbol.endsWith('USDT')&&!/(UP|DOWN|BULL|BEAR)USDT$/.test(x.symbol)&&!['USDCUSDT','FDUSDUSDT','TUSDUSDT','DAIUSDT'].includes(x.symbol)).sort((a,b)=>+b.quoteVolume-+a.quoteVolume).slice(0,50); let map=new Map(tr.map(x=>[x.symbol,+x.lastPrice]));
- let changes=all.map(x=>+x.priceChangePercent), breadth=changes.filter(x=>x>0).length/all.length*100, avg=changes.reduce((a,b)=>a+b,0)/changes.length, btc=+tr.find(x=>x.symbol==='BTCUSDT')?.priceChangePercent||0; let regime=btc<-5?'PANIC':avg<-2?'BEAR':avg>2?'BULL':'SIDEWAYS', mr=regime==='PANIC'?95:regime==='BEAR'?70:regime==='BULL'?25:45;
- let {data:sets}=await sb.from('trading_settings').select('*').eq('cloud_runner_enabled',true).eq('execution_mode','PAPER'); let cursor=claim.cursor||0, batch=all.slice(cursor,cursor+10); if(batch.length<10)batch=[...batch,...all.slice(0,10-batch.length)]; let next=(cursor+10)%50;
- let {data:positions}=await sb.from('paper_positions').select('*'); for(const p of positions||[]){let px=map.get(p.symbol);if(!px)continue;let high=Math.max(+p.highest_price||+p.average_entry,px), stop=+p.stop_loss||0;if(px>=(+p.trailing_activation||Infinity))stop=Math.max(stop,high*(1-(+p.trailing_distance_percent||1)/100),+p.average_entry*1.001);await sb.from('paper_positions').update({highest_price:high,stop_loss:stop}).eq('id',p.id);if(stop&&px<=stop){await sb.rpc('paper_sell_fraction_for_user',{p_user_id:p.user_id,p_symbol:p.symbol,p_price:px,p_fraction:1,p_reason:px<+p.average_entry?'STOP_LOSS':'TRAILING_STOP'});continue}if(!p.tp1_hit&&p.take_profit_1&&px>=+p.take_profit_1){await sb.rpc('paper_sell_fraction_for_user',{p_user_id:p.user_id,p_symbol:p.symbol,p_price:px,p_fraction:.25,p_reason:'TP1'});await sb.from('paper_positions').update({tp1_hit:true,stop_loss:+p.average_entry*1.001}).eq('id',p.id)}else if(!p.tp2_hit&&p.take_profit_2&&px>=+p.take_profit_2){await sb.rpc('paper_sell_fraction_for_user',{p_user_id:p.user_id,p_symbol:p.symbol,p_price:px,p_fraction:.33,p_reason:'TP2'});await sb.from('paper_positions').update({tp2_hit:true}).eq('id',p.id)}}
- let {data:openSh}=await sb.from('shadow_signals').select('*').eq('status','OPEN').lte('resolve_at',new Date().toISOString()); for(const s of openSh||[]){let px=map.get(s.symbol);if(!px)continue;let ret=(px/+s.entry_price-1)*100,diff=s.decision_with_news!==s.decision_without_news,con=0;if(diff){if(s.decision_with_news==='NO_TRADE'&&s.decision_without_news==='BUY_CANDIDATE')con=-ret;else if(s.decision_with_news==='BUY_CANDIDATE')con=ret}await sb.from('shadow_signals').update({exit_price:px,return_pct:ret,news_contribution_pct:con,news_contribution_usd:con*.25,resolved_at:new Date().toISOString(),status:'RESOLVED'}).eq('id',s.id)}
- for(const st of sets||[]){let run={user_id:st.user_id,universe_size:50,scanned_count:0,candidate_count:0,risk_allowed_count:0,executed_count:0,blocked_count:0,scan_cursor:cursor,status:'RUNNING',market_regime:regime,market_risk:mr,market_breadth:breadth,market_avg_change:avg,market_volatility:Math.abs(avg)};let {data:rr}=await sb.from('autopilot_scan_runs').insert(run).select().single();let best=null, rows=[];for(const x of batch){try{let [a,b,c]=await Promise.all([kl(x.symbol,'15m'),kl(x.symbol,'1h'),kl(x.symbol,'4h')]), ss=[score(a),score(b),score(c)], names=['SCALP','DAY','SWING'], bi=ss.map(q=>q.opp).indexOf(Math.max(...ss.map(q=>q.opp))), q=ss[bi], allowed=q.opp>=+st.paper_candidate_opportunity&&q.risk<=+st.paper_max_risk&&q.conf>=+st.paper_min_confidence&&regime!=='PANIC'&&!st.safe_mode;let final=allowed?'BUY_CANDIDATE':'NO_TRADE';rows.push({run_id:rr.id,user_id:st.user_id,symbol:x.symbol,opportunity:q.opp,risk:q.risk,confidence:q.conf,required_opportunity:st.paper_candidate_opportunity,max_allowed_risk:st.paper_max_risk,required_confidence:st.paper_min_confidence,primary_strategy:names[bi],consensus_count:ss.filter(z=>z.opp>=65).length,market_regime:regime,news_level:'NORMAL',veto_active:regime==='PANIC',risk_manager_allowed:allowed,blocks:allowed?[]:[regime==='PANIC'?'PANİK rejimi':'Eşikler karşılanmadı'],final_action:final});let {data:existing}=await sb.from('shadow_signals').select('id').eq('user_id',st.user_id).eq('symbol',x.symbol).eq('status','OPEN').maybeSingle();if(!existing)await sb.from('shadow_signals').insert({user_id:st.user_id,symbol:x.symbol,entry_price:+x.lastPrice,opportunity_with_news:q.opp,risk_with_news:q.risk,confidence_with_news:q.conf,decision_with_news:final,opportunity_without_news:q.opp,risk_without_news:q.risk,confidence_without_news:q.conf,decision_without_news:final,primary_strategy:names[bi],market_regime:regime,consensus_count:ss.filter(z=>z.opp>=65).length,veto_active:regime==='PANIC',news_level:'NORMAL',news_reason:'Ücretli haber sağlayıcısı yapılandırılmadı',horizon_minutes:1,resolve_at:new Date(Date.now()+60000).toISOString(),status:'OPEN'});if(allowed&&(!best||q.opp-q.risk/2>best.rank))best={symbol:x.symbol,price:+x.lastPrice,q,strategy:names[bi],rank:q.opp-q.risk/2};}catch{}}
- if(rows.length)await sb.from('autopilot_scan_results').insert(rows);let executed=0;if(st.automation_mode==='FULL_AUTO'&&!st.safe_mode&&best){let {data:acc}=await sb.from('paper_accounts').select('*').eq('user_id',st.user_id).single(),{data:pos}=await sb.from('paper_positions').select('*').eq('user_id',st.user_id);if((pos||[]).length<st.max_positions&&!pos?.some(p=>p.symbol===best.symbol)){let equity=+acc.balance+(pos||[]).reduce((s,p)=>s+(map.get(p.symbol)||+p.average_entry)*+p.quantity,0),stopPct=clamp(best.q.atr*1.4/100,.012,.05),riskBudget=equity*(+st.risk_per_trade_percent/100),spend=Math.min(riskBudget/stopPct,equity*(+st.position_size_percent/100),+acc.balance);if(spend>=2){let px=best.price,stop=px*(1-stopPct);let {error}=await sb.rpc('paper_buy_for_user',{p_user_id:st.user_id,p_symbol:best.symbol,p_price:px,p_spend:spend,p_stop:stop,p_tp1:px*(1+stopPct*1.5),p_tp2:px*(1+stopPct*2.5),p_trail_activation:px*(1+stopPct*1.8),p_trail_pct:Math.max(.6,stopPct*100*.55),p_strategy:best.strategy,p_regime:regime,p_opp:best.q.opp,p_risk:best.q.risk,p_conf:best.q.conf});if(!error){executed=1;await sb.from('signals').insert({user_id:st.user_id,symbol:best.symbol,signal_type:'BUY',price:px,opportunity:best.q.opp,risk:best.q.risk,confidence:best.q.conf,primary_strategy:best.strategy,market_regime:regime,status:'EXECUTED',source:'cloud-auto-runner',analysis:'Otomatik sanal işlem açıldı.'})}}}}
- await sb.from('autopilot_scan_runs').update({scanned_count:rows.length,candidate_count:rows.filter(r=>r.final_action==='BUY_CANDIDATE').length,risk_allowed_count:rows.filter(r=>r.risk_manager_allowed).length,executed_count:executed,blocked_count:rows.filter(r=>!r.risk_manager_allowed).length,completed_at:new Date().toISOString(),status:'COMPLETED'}).eq('id',rr.id);await sb.from('trading_settings').update({runner_last_seen_at:new Date().toISOString()}).eq('user_id',st.user_id)}
- await sb.rpc('advance_paper_runner',{p_cursor:next});return res.status(200).json({ok:true,users:sets?.length||0,scanned:batch.length,regime});}
+
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+
+// Vercel'in bulunduğu bolgede api.binance.com zaman zaman 451 / hata JSON'u
+// dondurebilir. Market-data-only endpoint'i once deneyip resmi public API
+// hostlarini yedek olarak kullaniyoruz.
+const BINANCE_BASES = [
+  'https://data-api.binance.vision',
+  'https://api.binance.com',
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+];
+
+const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+
+const ema = (values, period) => {
+  let value = values[0];
+  const k = 2 / (period + 1);
+  for (const x of values) value = x * k + value * (1 - k);
+  return value;
+};
+
+const rsi = (values) => {
+  let gain = 0;
+  let loss = 0;
+  for (let i = values.length - 14; i < values.length; i += 1) {
+    const delta = values[i] - values[i - 1];
+    if (delta > 0) gain += delta;
+    else loss -= delta;
+  }
+  return loss ? 100 - (100 / (1 + gain / loss)) : 70;
+};
+
+async function fetchBinanceJson(path, validator, label) {
+  const errors = [];
+
+  for (const base of BINANCE_BASES) {
+    try {
+      const response = await fetch(`${base}${path}`, {
+        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.3.3' },
+        signal: AbortSignal.timeout(12_000),
+      });
+
+      const text = await response.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`JSON degil: ${text.slice(0, 120)}`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${data?.msg || text.slice(0, 120)}`);
+      }
+
+      if (validator && !validator(data)) {
+        throw new Error(`Beklenmeyen veri tipi: ${JSON.stringify(data).slice(0, 180)}`);
+      }
+
+      return { data, base };
+    } catch (error) {
+      errors.push(`${base}: ${error?.message || String(error)}`);
+    }
+  }
+
+  throw new Error(`${label} alinamadi. ${errors.join(' | ')}`);
+}
+
+async function get24hTickers() {
+  const { data, base } = await fetchBinanceJson(
+    '/api/v3/ticker/24hr',
+    Array.isArray,
+    'Binance 24 saatlik piyasa verisi',
+  );
+  return { tickers: data, base };
+}
+
+async function getKlines(symbol, interval) {
+  const { data } = await fetchBinanceJson(
+    `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=60`,
+    (value) => Array.isArray(value) && value.length >= 50 && Array.isArray(value[0]),
+    `${symbol} ${interval} mum verisi`,
+  );
+
+  return data.map((x) => ({
+    c: Number(x[4]),
+    h: Number(x[2]),
+    l: Number(x[3]),
+    v: Number(x[5]),
+  }));
+}
+
+function score(klines) {
+  const closes = klines.map((x) => x.c);
+  const last = closes.at(-1);
+  const e9 = ema(closes, 9);
+  const e21 = ema(closes, 21);
+  const e50 = ema(closes, 50);
+  const R = rsi(closes);
+  const momentum = (last / closes.at(-6) - 1) * 100;
+  const atr = klines.slice(-14).reduce((sum, x) => sum + (x.h - x.l), 0) / 14 / last * 100;
+  const averageVolume = klines.slice(-21, -1).reduce((sum, x) => sum + x.v, 0) / 20 || 1;
+  const volumeRatio = klines.at(-1).v / averageVolume;
+
+  let opportunity = 50
+    + (e9 > e21 ? 10 : -8)
+    + (e21 > e50 ? 10 : -8)
+    + clamp(momentum * 3, -12, 12)
+    + (R > 48 && R < 68 ? 8 : R > 75 ? -8 : 0)
+    + clamp((volumeRatio - 1) * 8, -5, 8);
+
+  let risk = 28
+    + atr * 6
+    + (R > 75 ? 12 : 0)
+    + (e9 < e21 ? 8 : 0);
+
+  let confidence = 58
+    + (e9 > e21 && e21 > e50 ? 14 : 0)
+    + (volumeRatio > 1.1 ? 8 : 0)
+    - Math.min(12, atr * 2);
+
+  return {
+    opp: Math.round(clamp(opportunity, 0, 100)),
+    risk: Math.round(clamp(risk, 0, 100)),
+    conf: Math.round(clamp(confidence, 0, 100)),
+    atr,
+  };
+}
+
+async function logHealth(sb, component, severity, message, metadata = null) {
+  try {
+    await sb.from('system_health_log').insert({
+      component,
+      severity,
+      message,
+      metadata,
+    });
+  } catch {
+    // Loglama ana islemi bozmamali.
+  }
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Yalnizca POST desteklenir.' });
+  }
+
+  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
+    return res.status(500).json({ error: 'Supabase sunucu ayarlari eksik.' });
+  }
+
+  const sb = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const { data: claim, error: claimError } = await sb.rpc('claim_paper_runner');
+  if (claimError) return res.status(500).json({ error: claimError.message });
+  if (!claim?.claimed) return res.status(200).json({ ok: true, skipped: true, reason: 'RUNNER_BUSY' });
+
+  try {
+    const { tickers, base: binanceBase } = await get24hTickers();
+
+    const all = tickers
+      .filter((x) => typeof x?.symbol === 'string')
+      .filter((x) => x.symbol.endsWith('USDT'))
+      .filter((x) => !/(UP|DOWN|BULL|BEAR)USDT$/.test(x.symbol))
+      .filter((x) => !['USDCUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'DAIUSDT'].includes(x.symbol))
+      .filter((x) => Number.isFinite(Number(x.quoteVolume)) && Number.isFinite(Number(x.lastPrice)))
+      .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
+      .slice(0, 50);
+
+    if (all.length < 10) {
+      throw new Error(`Binance evreni yetersiz: ${all.length} uygun USDT paritesi.`);
+    }
+
+    const priceMap = new Map(
+      tickers
+        .filter((x) => typeof x?.symbol === 'string' && Number.isFinite(Number(x.lastPrice)))
+        .map((x) => [x.symbol, Number(x.lastPrice)]),
+    );
+
+    const changes = all.map((x) => Number(x.priceChangePercent || 0));
+    const breadth = (changes.filter((x) => x > 0).length / all.length) * 100;
+    const averageChange = changes.reduce((a, b) => a + b, 0) / changes.length;
+    const btcChange = Number(tickers.find((x) => x.symbol === 'BTCUSDT')?.priceChangePercent || 0);
+    const regime = btcChange < -5 ? 'PANIK' : averageChange < -2 ? 'AYI' : averageChange > 2 ? 'BOGA' : 'YATAY';
+    const marketRisk = regime === 'PANIK' ? 95 : regime === 'AYI' ? 70 : regime === 'BOGA' ? 25 : 45;
+
+    const { data: settings, error: settingsError } = await sb
+      .from('trading_settings')
+      .select('*')
+      .eq('cloud_runner_enabled', true)
+      .eq('execution_mode', 'PAPER');
+
+    if (settingsError) throw settingsError;
+
+    const cursor = Number(claim.cursor || 0) % all.length;
+    let batch = all.slice(cursor, cursor + 10);
+    if (batch.length < 10) batch = [...batch, ...all.slice(0, 10 - batch.length)];
+    const nextCursor = (cursor + 10) % all.length;
+
+    // Acik PAPER100 pozisyonlarinin stop / TP / trailing yonetimi.
+    const { data: positions, error: positionsError } = await sb.from('paper_positions').select('*');
+    if (positionsError) throw positionsError;
+
+    for (const position of positions || []) {
+      const price = priceMap.get(position.symbol);
+      if (!price) continue;
+
+      const highest = Math.max(Number(position.highest_price || position.average_entry), price);
+      let stop = Number(position.stop_loss || 0);
+
+      if (price >= Number(position.trailing_activation || Infinity)) {
+        stop = Math.max(
+          stop,
+          highest * (1 - Number(position.trailing_distance_percent || 1) / 100),
+          Number(position.average_entry) * 1.001,
+        );
+      }
+
+      await sb.from('paper_positions').update({ highest_price: highest, stop_loss: stop }).eq('id', position.id);
+
+      if (stop && price <= stop) {
+        await sb.rpc('paper_sell_fraction_for_user', {
+          p_user_id: position.user_id,
+          p_symbol: position.symbol,
+          p_price: price,
+          p_fraction: 1,
+          p_reason: price < Number(position.average_entry) ? 'ZARAR_DURDUR' : 'IZ_SUREN_STOP',
+        });
+        continue;
+      }
+
+      if (!position.tp1_hit && position.take_profit_1 && price >= Number(position.take_profit_1)) {
+        await sb.rpc('paper_sell_fraction_for_user', {
+          p_user_id: position.user_id,
+          p_symbol: position.symbol,
+          p_price: price,
+          p_fraction: 0.25,
+          p_reason: 'KAR_AL_1',
+        });
+        await sb.from('paper_positions').update({
+          tp1_hit: true,
+          stop_loss: Number(position.average_entry) * 1.001,
+        }).eq('id', position.id);
+      } else if (!position.tp2_hit && position.take_profit_2 && price >= Number(position.take_profit_2)) {
+        await sb.rpc('paper_sell_fraction_for_user', {
+          p_user_id: position.user_id,
+          p_symbol: position.symbol,
+          p_price: price,
+          p_fraction: 0.33,
+          p_reason: 'KAR_AL_2',
+        });
+        await sb.from('paper_positions').update({ tp2_hit: true }).eq('id', position.id);
+      }
+    }
+
+    // 1 dakikasi dolan golge sinyallerini coz.
+    const { data: openShadow, error: shadowError } = await sb
+      .from('shadow_signals')
+      .select('*')
+      .eq('status', 'OPEN')
+      .lte('resolve_at', new Date().toISOString());
+
+    if (shadowError) throw shadowError;
+
+    for (const shadow of openShadow || []) {
+      const price = priceMap.get(shadow.symbol);
+      if (!price) continue;
+      const returnPct = (price / Number(shadow.entry_price) - 1) * 100;
+      const decisionChanged = shadow.decision_with_news !== shadow.decision_without_news;
+      let newsContribution = 0;
+
+      if (decisionChanged) {
+        if (shadow.decision_with_news === 'NO_TRADE' && shadow.decision_without_news === 'BUY_CANDIDATE') {
+          newsContribution = -returnPct;
+        } else if (shadow.decision_with_news === 'BUY_CANDIDATE') {
+          newsContribution = returnPct;
+        }
+      }
+
+      await sb.from('shadow_signals').update({
+        exit_price: price,
+        return_pct: returnPct,
+        news_contribution_pct: newsContribution,
+        news_contribution_usd: newsContribution * 0.25,
+        resolved_at: new Date().toISOString(),
+        status: 'RESOLVED',
+      }).eq('id', shadow.id);
+    }
+
+    for (const st of settings || []) {
+      const run = {
+        user_id: st.user_id,
+        universe_size: all.length,
+        scanned_count: 0,
+        candidate_count: 0,
+        risk_allowed_count: 0,
+        executed_count: 0,
+        blocked_count: 0,
+        scan_cursor: cursor,
+        status: 'RUNNING',
+        market_regime: regime,
+        market_risk: marketRisk,
+        market_breadth: breadth,
+        market_avg_change: averageChange,
+        market_volatility: Math.abs(averageChange),
+      };
+
+      const { data: runRow, error: runError } = await sb
+        .from('autopilot_scan_runs')
+        .insert(run)
+        .select()
+        .single();
+
+      if (runError) throw runError;
+
+      let best = null;
+      const resultRows = [];
+
+      for (const ticker of batch) {
+        try {
+          const [scalpKlines, dayKlines, swingKlines] = await Promise.all([
+            getKlines(ticker.symbol, '15m'),
+            getKlines(ticker.symbol, '1h'),
+            getKlines(ticker.symbol, '4h'),
+          ]);
+
+          const scores = [score(scalpKlines), score(dayKlines), score(swingKlines)];
+          const names = ['SCALP', 'GUNLUK', 'SWING'];
+          const bestIndex = scores.map((x) => x.opp).indexOf(Math.max(...scores.map((x) => x.opp)));
+          const q = scores[bestIndex];
+
+          const allowed = q.opp >= Number(st.paper_candidate_opportunity)
+            && q.risk <= Number(st.paper_max_risk)
+            && q.conf >= Number(st.paper_min_confidence)
+            && regime !== 'PANIK'
+            && !st.safe_mode;
+
+          const finalAction = allowed ? 'BUY_CANDIDATE' : 'NO_TRADE';
+          const consensusCount = scores.filter((x) => x.opp >= 65).length;
+
+          resultRows.push({
+            run_id: runRow.id,
+            user_id: st.user_id,
+            symbol: ticker.symbol,
+            opportunity: q.opp,
+            risk: q.risk,
+            confidence: q.conf,
+            required_opportunity: st.paper_candidate_opportunity,
+            max_allowed_risk: st.paper_max_risk,
+            required_confidence: st.paper_min_confidence,
+            primary_strategy: names[bestIndex],
+            consensus_count: consensusCount,
+            market_regime: regime,
+            news_level: 'NORMAL',
+            veto_active: regime === 'PANIK',
+            risk_manager_allowed: allowed,
+            blocks: allowed ? [] : [regime === 'PANIK' ? 'PANIK piyasa rejimi' : 'Esikler karsilanmadi'],
+            final_action: finalAction,
+          });
+
+          const { data: existing } = await sb
+            .from('shadow_signals')
+            .select('id')
+            .eq('user_id', st.user_id)
+            .eq('symbol', ticker.symbol)
+            .eq('status', 'OPEN')
+            .maybeSingle();
+
+          if (!existing) {
+            await sb.from('shadow_signals').insert({
+              user_id: st.user_id,
+              symbol: ticker.symbol,
+              entry_price: Number(ticker.lastPrice),
+              opportunity_with_news: q.opp,
+              risk_with_news: q.risk,
+              confidence_with_news: q.conf,
+              decision_with_news: finalAction,
+              opportunity_without_news: q.opp,
+              risk_without_news: q.risk,
+              confidence_without_news: q.conf,
+              decision_without_news: finalAction,
+              primary_strategy: names[bestIndex],
+              market_regime: regime,
+              consensus_count: consensusCount,
+              veto_active: regime === 'PANIK',
+              news_level: 'NORMAL',
+              news_reason: 'Ucretli haber saglayicisi yapilandirilmadi',
+              horizon_minutes: 1,
+              resolve_at: new Date(Date.now() + 60_000).toISOString(),
+              status: 'OPEN',
+            });
+          }
+
+          if (allowed && (!best || q.opp - q.risk / 2 > best.rank)) {
+            best = {
+              symbol: ticker.symbol,
+              price: Number(ticker.lastPrice),
+              q,
+              strategy: names[bestIndex],
+              rank: q.opp - q.risk / 2,
+            };
+          }
+        } catch (error) {
+          // Bir coin hata verirse tum tarama durmasin; diagnostics'te gorunsun.
+          resultRows.push({
+            run_id: runRow.id,
+            user_id: st.user_id,
+            symbol: ticker.symbol,
+            primary_strategy: 'VERI_HATASI',
+            consensus_count: 0,
+            market_regime: regime,
+            news_level: 'NORMAL',
+            veto_active: false,
+            risk_manager_allowed: false,
+            blocks: [`Piyasa verisi alinamadi: ${error?.message || String(error)}`],
+            final_action: 'NO_TRADE',
+          });
+        }
+      }
+
+      if (resultRows.length) await sb.from('autopilot_scan_results').insert(resultRows);
+
+      let executed = 0;
+      if (st.automation_mode === 'FULL_AUTO' && !st.safe_mode && best) {
+        const [{ data: account }, { data: userPositions }] = await Promise.all([
+          sb.from('paper_accounts').select('*').eq('user_id', st.user_id).single(),
+          sb.from('paper_positions').select('*').eq('user_id', st.user_id),
+        ]);
+
+        const currentPositions = userPositions || [];
+        const hasSymbol = currentPositions.some((p) => p.symbol === best.symbol);
+
+        if (currentPositions.length < Number(st.max_positions) && !hasSymbol) {
+          const equity = Number(account.balance) + currentPositions.reduce(
+            (sum, p) => sum + (priceMap.get(p.symbol) || Number(p.average_entry)) * Number(p.quantity),
+            0,
+          );
+          const stopPct = clamp(best.q.atr * 1.4 / 100, 0.012, 0.05);
+          const riskBudget = equity * (Number(st.risk_per_trade_percent) / 100);
+          const spend = Math.min(
+            riskBudget / stopPct,
+            equity * (Number(st.position_size_percent) / 100),
+            Number(account.balance),
+          );
+
+          if (spend >= 2) {
+            const price = best.price;
+            const stop = price * (1 - stopPct);
+            const { error: buyError } = await sb.rpc('paper_buy_for_user', {
+              p_user_id: st.user_id,
+              p_symbol: best.symbol,
+              p_price: price,
+              p_spend: spend,
+              p_stop: stop,
+              p_tp1: price * (1 + stopPct * 1.5),
+              p_tp2: price * (1 + stopPct * 2.5),
+              p_trail_activation: price * (1 + stopPct * 1.8),
+              p_trail_pct: Math.max(0.6, stopPct * 100 * 0.55),
+              p_strategy: best.strategy,
+              p_regime: regime,
+              p_opp: best.q.opp,
+              p_risk: best.q.risk,
+              p_conf: best.q.conf,
+            });
+
+            if (!buyError) {
+              executed = 1;
+              await sb.from('signals').insert({
+                user_id: st.user_id,
+                symbol: best.symbol,
+                signal_type: 'BUY',
+                price,
+                opportunity: best.q.opp,
+                risk: best.q.risk,
+                confidence: best.q.conf,
+                primary_strategy: best.strategy,
+                market_regime: regime,
+                status: 'EXECUTED',
+                source: 'cloud-auto-runner',
+                analysis: 'Otomatik sanal islem acildi.',
+              });
+            }
+          }
+        }
+      }
+
+      await sb.from('autopilot_scan_runs').update({
+        scanned_count: resultRows.length,
+        candidate_count: resultRows.filter((x) => x.final_action === 'BUY_CANDIDATE').length,
+        risk_allowed_count: resultRows.filter((x) => x.risk_manager_allowed).length,
+        executed_count: executed,
+        blocked_count: resultRows.filter((x) => !x.risk_manager_allowed).length,
+        completed_at: new Date().toISOString(),
+        status: 'COMPLETED',
+      }).eq('id', runRow.id);
+
+      await sb.from('trading_settings').update({
+        runner_last_seen_at: new Date().toISOString(),
+      }).eq('user_id', st.user_id);
+    }
+
+    await sb.rpc('advance_paper_runner', { p_cursor: nextCursor });
+
+    return res.status(200).json({
+      ok: true,
+      users: settings?.length || 0,
+      scanned: batch.length,
+      regime,
+      binanceBase,
+    });
+  } catch (error) {
+    const message = error?.message || String(error);
+    console.error('PAPER100 runner hatasi:', message);
+    await logHealth(sb, 'PAPER100_RUNNER', 'ERROR', message, {
+      at: new Date().toISOString(),
+    });
+    return res.status(500).json({ error: message });
+  }
+}

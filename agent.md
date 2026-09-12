@@ -505,3 +505,13 @@ Kritik proje kararı:
 - Gölge sinyalleri otomatik üretilir ve 1 dakika sonra otomatik çözülür.
 - Otomatik worker servis anahtarı yalnız Vercel server-side `SUPABASE_SECRET_KEY` değişkeninde tutulur; VITE değişkenine konmaz.
 - Supabase Cron endpoint'i yalnız PAPER simülasyonunu tetikler ve DB lock sayesinde 45 saniyeden sık çalışamaz.
+
+## 26. v1.3.3 Vercel Binance public data fallback fix (2026-09-12)
+- PAPER100 Cron was confirmed to call `/api/paper-runner` every minute, but Vercel logs showed `TypeError: tr.filter is not a function`.
+- Root cause: `api.binance.com/api/v3/ticker/24hr` can return an error JSON object instead of the expected ticker array from some Vercel regions; the old runner called `.filter()` without validating the response type.
+- Runner now uses Binance market-data-only `https://data-api.binance.vision` first, with `api.binance.com`, `api1`, `api2`, and `api3` as fallbacks.
+- Every Binance response is checked for HTTP status, JSON parseability and expected array shape before strategy logic executes.
+- Kline requests use the same fallback layer; one failed coin no longer aborts the whole scan and is recorded as a diagnostics row.
+- Runner failures are written to `system_health_log` when possible and returned with a Turkish error message.
+- Existing Supabase Cron and database migrations do not need to be rerun for this fix.
+- PAPER100 remains simulation-only; no real Binance order endpoints are introduced.

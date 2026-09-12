@@ -23,3 +23,7 @@ Google AI Studio dönemindeki kapsamlı V11 ayar görünümü Supabase sürümü
 ## Güvenlik
 
 Bu paket yalnız sanal test içindir. Gerçek para emirleri kapalıdır.
+
+
+### v1.3.3 — Vercel public market-data compatibility
+The cloud PAPER100 runner now validates Binance responses and automatically falls back to Binance market-data/public API hosts when a Vercel region cannot use the primary host. Existing Cron SQL does not need to be rerun.
