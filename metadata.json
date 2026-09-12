@@ -1,0 +1,6 @@
+{
+  "name": "Kripto AI Asistan",
+  "description": "Yapay zeka destekli kripto para portföy yöneticisi ve alım-satım simülasyonu.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
