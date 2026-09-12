@@ -12,7 +12,7 @@ export default function SignalFeed() {
   };
 
   const handleApprove = (id: string) => {
-    const amount = Number(customAmounts[id]) || 1000; // Varsayılan $1000
+    const amount = Number(customAmounts[id]) || Math.min(state.balance, state.balance*((state.positionSizePercent||25)/100));
     if (amount <= 0) return;
     approveSignal(id, amount);
   };
@@ -27,11 +27,11 @@ export default function SignalFeed() {
           </h2>
           <p className="text-sm text-zinc-400 mt-1">
             {state.autoPilot 
-              ? "V3 güvenli mod: otomatik gerçek emir kapalı." 
+              ? "Güvenli sanal mod: otomatik gerçek emir kapalı." 
               : "Analizleri inceleyip kendiniz karar verin."}
           </p>
         </div>
-        <span className="px-3 py-1.5 bg-emerald-500/10 text-emerald-400 text-xs font-medium rounded-lg border border-emerald-500/20">Binance Spot • V3</span>
+        <span className="px-3 py-1.5 bg-emerald-500/10 text-emerald-400 text-xs font-medium rounded-lg border border-emerald-500/20">Binance Spot • Sanal Test</span>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -39,9 +39,9 @@ export default function SignalFeed() {
           <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg flex items-start gap-3">
             <AlertTriangle size={18} className="text-blue-400 mt-0.5 shrink-0" />
             <div>
-              <h4 className="text-sm font-medium text-blue-400">Oto-Pilot Devrede</h4>
+              <h4 className="text-sm font-medium text-blue-400">Otomatik Pilot Devrede</h4>
               <p className="text-xs text-blue-400/80 mt-1 leading-relaxed">
-                Günlük hedef bölgesi %{state.dailyTargetPercent}. V3 bu hedef uğruna işlem zorlamaz ve otomatik gerçek emir göndermez.
+                Günlük hedef bölgesi %{state.dailyTargetPercent}. Sistem bu hedef uğruna işlem zorlamaz ve hiçbir gerçek emir göndermez.
               </p>
             </div>
           </div>
@@ -50,7 +50,7 @@ export default function SignalFeed() {
         {signals.length === 0 && !state.autoPilot && (
           <div className="text-center py-10">
             <BrainCircuit size={32} className="mx-auto text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-500">Şu an yeni bir sinyal yok.<br/>Bir coini market tablosundan analiz ederek sinyal oluşturabilirsiniz.</p>
+            <p className="text-sm text-zinc-500">Şu an yeni bir sinyal yok.<br/>Bir coini piyasa tablosundan inceleyerek sinyal oluşturabilirsiniz.</p>
           </div>
         )}
 
@@ -70,13 +70,13 @@ export default function SignalFeed() {
                     ? "bg-emerald-500/20 text-emerald-400" 
                     : "bg-rose-500/20 text-rose-400"
                 )}>
-                  {signal.type}
+                  {signal.type==='BUY'?'AL':'SAT'}
                 </span>
                 <span className="font-medium text-zinc-200">{signal.symbol}</span>
                 <span className="text-xs text-zinc-500">@ {formatCurrency(signal.price)}</span>
               </div>
               <div className="flex flex-col items-end">
-                <span className="text-xs text-zinc-400">Opportunity Score</span>
+                <span className="text-xs text-zinc-400">Fırsat Puanı</span>
                 <span className={cn(
                   "font-bold text-sm",
                   signal.aiScore >= 80 ? "text-emerald-400" : "text-yellow-400"
@@ -105,7 +105,7 @@ export default function SignalFeed() {
                   <span className="text-xs text-zinc-500 whitespace-nowrap">Yatırım (USDT):</span>
                   <input
                     type="number"
-                    value={customAmounts[signal.id] !== undefined ? customAmounts[signal.id] : "1000"}
+                    value={customAmounts[signal.id] !== undefined ? customAmounts[signal.id] : String(Math.min(state.balance, state.balance*((state.positionSizePercent||25)/100)).toFixed(2))}
                     onChange={(e) => handleAmountChange(signal.id, e.target.value)}
                     className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors"
                   />

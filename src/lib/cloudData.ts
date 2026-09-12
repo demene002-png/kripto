@@ -29,8 +29,26 @@ export async function loadPaperState(){
 }
 
 export function mapSettingsToState(s:any):Partial<AppState>{
+  const riskPerTradePercent=Number(s?.risk_per_trade_percent??0.5);
+  const maxDailyLossPercent=Number(s?.max_daily_loss_percent??2);
+  const maxOpenRiskPercent=Number(s?.max_open_risk_percent??1.75);
+  const maxPositions=Number(s?.max_positions??3);
+  const storedProfile=String(s?.risk_profile||'BALANCED') as AppState['riskProfile'];
+  const presets:any={
+    CONSERVATIVE:{riskPerTradePercent:.35,maxDailyLossPercent:1.25,maxOpenRiskPercent:1,maxPositions:2},
+    BALANCED:{riskPerTradePercent:.5,maxDailyLossPercent:2,maxOpenRiskPercent:1.75,maxPositions:3},
+    AGGRESSIVE:{riskPerTradePercent:.85,maxDailyLossPercent:3,maxOpenRiskPercent:3,maxPositions:5}
+  };
+  const preset=presets[storedProfile];
+  const matchesPreset=!preset || (
+    Math.abs(riskPerTradePercent-preset.riskPerTradePercent)<0.0001 &&
+    Math.abs(maxDailyLossPercent-preset.maxDailyLossPercent)<0.0001 &&
+    Math.abs(maxOpenRiskPercent-preset.maxOpenRiskPercent)<0.0001 &&
+    maxPositions===preset.maxPositions
+  );
+  const riskProfile:AppState['riskProfile']=storedProfile==='CUSTOM'||matchesPreset?storedProfile:'CUSTOM';
   return {
-    dailyTargetPercent:Number(s?.daily_target_percent??3),positionSizePercent:Number(s?.position_size_percent??25),riskProfile:s?.risk_profile||'BALANCED',riskPerTradePercent:Number(s?.risk_per_trade_percent??0.5),maxDailyLossPercent:Number(s?.max_daily_loss_percent??2),maxOpenRiskPercent:Number(s?.max_open_risk_percent??1.75),maxPositions:Number(s?.max_positions??3),executionMode:'PAPER',automationMode:s?.automation_mode||'MANUAL',safeMode:Boolean(s?.safe_mode),autoPilot:s?.automation_mode==='FULL_AUTO',autoPilotAmount:Number(s?.position_size_percent??25),autoPilotBudget:100,
+    dailyTargetPercent:Number(s?.daily_target_percent??3),positionSizePercent:Number(s?.position_size_percent??25),riskProfile,riskPerTradePercent,maxDailyLossPercent,maxOpenRiskPercent,maxPositions,executionMode:'PAPER',automationMode:s?.automation_mode||'MANUAL',safeMode:Boolean(s?.safe_mode),autoPilot:s?.automation_mode==='FULL_AUTO',autoPilotAmount:Number(s?.position_size_percent??25),autoPilotBudget:100,
   };
 }
 
@@ -46,7 +64,7 @@ export async function saveSettings(values:Partial<AppState>){
   if(values.maxPositions!=null)payload.max_positions=values.maxPositions;
   if(values.automationMode!=null)payload.automation_mode=values.automationMode;
   if(values.safeMode!=null)payload.safe_mode=values.safeMode;
-  if(values.autoPilot!=null)payload.automation_mode=values.autoPilot?'FULL_AUTO':'MANUAL';
+  if(values.autoPilot!=null && values.automationMode==null)payload.automation_mode=values.autoPilot?'FULL_AUTO':'MANUAL';
   const {error}=await supabase.from('trading_settings').update(payload).eq('user_id',uid); if(error)throw error;
 }
 

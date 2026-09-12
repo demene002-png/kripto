@@ -1,0 +1,15 @@
+GITHUB'A TEK SEFERDE YUKLEME
+
+1) Bu ZIP'i bilgisayarında çıkar.
+2) GitHub'da demene002-png/kripto reposunu aç.
+3) Add file > Upload files.
+4) ZIP'in kendisini değil, ZIP'ten çıkan dosya ve klasörlerin tamamını repo köküne sürükle.
+5) Commit directly to main seçili olsun.
+6) Commit mesajı: "Tam Turkce arayuz ve V11 ayar paneli"
+7) Vercel otomatik yeni deployment başlatacaktır.
+
+Not: Vercel ortam değişkenleri değişmeyecek:
+VITE_SUPABASE_URL=https://...supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+
+VITE_SUPABASE_URL sonunda /rest/v1/ OLMAMALIDIR.

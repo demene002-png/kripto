@@ -24,7 +24,7 @@ export async function fetchTopUsdtMarkets(limit=50):Promise<CoinData[]> {
     fetch(`${BASE}/api/v3/ticker/24hr`, { cache:'no-store' }),
     fetch(`${BASE}/api/v3/ticker/bookTicker`, { cache:'no-store' }),
   ]);
-  if(!tickerRes.ok || !bookRes.ok) throw new Error('Binance public market data unavailable');
+  if(!tickerRes.ok || !bookRes.ok) throw new Error('Binance genel piyasa verisine ulaşılamıyor');
   const tickers:any[] = await tickerRes.json();
   const books:any[] = await bookRes.json();
   const bookMap=new Map(books.map(b=>[String(b.symbol),b]));

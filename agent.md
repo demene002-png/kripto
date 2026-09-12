@@ -464,3 +464,23 @@ This is now a critical project architecture decision.
 - 24/7 Strategy Manager, Market Regime, News/VETO, Shadow resolver, Auto Scanner and backtest workers will be moved to Supabase Edge Functions + Cron in the next cloud phase.
 - Real Binance order execution remains outside the current cloud migration and must not be enabled implicitly.
 - CryptoPanic/news A-B retest remains mandatory after the cloud runner is collecting valid >=15 minute shadow samples.
+
+## Supabase Settings Synchronization Fix — 2026-09-12
+- PAPER100 settings UI previously issued one Supabase write per slider movement and then reloaded the full settings row after every write. Concurrent responses could arrive out of order and overwrite a newer local slider value with an older database snapshot.
+- Settings updates now use optimistic functional React state updates, merge rapid changes into a single pending patch, and debounce Supabase writes by 350 ms.
+- Successful settings writes no longer trigger an immediate full portfolio/settings reload.
+- Background portfolio polling temporarily preserves locally dirty settings so a poll cannot overwrite a setting while it is being edited/saved.
+- On an actual Supabase settings write failure, the application reloads authoritative state from Supabase.
+- This synchronization rule is critical for every future cloud settings field; do not reintroduce full settings refetch-after-each-slider-change behavior.
+
+## 27. Tam Türkçe Arayüz + V11 Ayar Paneli Geri Yükleme (2026-09-12)
+
+Kritik proje kararı:
+- Kullanıcıya görünen arayüz, coin/sembol ve marka/ürün adları dışında Türkçe olacaktır.
+- Google AI Studio dönemindeki kapsamlı V11 ayar paneli, Supabase bulut sürümüne geri taşınmıştır.
+- Ayar panelinde Risk Profili (Muhafazakâr/Dengeli/Agresif/Özel), işlem başına risk, günlük zarar, toplam açık risk, maksimum pozisyon, pozisyon sermaye oranı, günlük hedef, otomasyon modu, Güvenli Mod, Acil Durdurma/Kilidi Aç, mutabakat, koruma, piyasa verisi ve Binance/Supabase bağlantı bilgileri birlikte gösterilir.
+- ACİL DURDUR ve GÜVENLİ MOD, Supabase `safe_mode` alanını kullanır ve yeni sanal alışları engeller; risk azaltıcı satışları engellemez.
+- Ayar değişiklikleri iyimser arayüz güncellemesi + 350 ms toplu Supabase kaydıyla yapılır; eski yanıtların yeni slider değerlerini ezmesine izin verilmez.
+- `automationMode` açıkça gönderilmişse eski `autoPilot` uyumluluk alanı bu modu MANUAL'a geri çeviremez; Yarı Otomatik modu kalıcı olarak doğru kaydedilir.
+- Bu sürüm yalnız 100 USDT sanal testtir. Gerçek Binance emirleri kapalıdır.
+- Bu aşamada bulut arka plan otomatik tarayıcısı/strateji motoru henüz devrede değilse arayüz bunu açıkça Türkçe olarak belirtir ve sahte sonuç üretmez.

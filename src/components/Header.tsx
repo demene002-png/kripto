@@ -23,9 +23,9 @@ export default function Header() {
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-3">
               <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                PAPER100 • {state.automationMode === 'MANUAL' ? 'Manuel' : state.automationMode === 'SEMI_AUTO' ? 'Yarı Otomatik' : 'Tam Otomatik'}
+                SANAL 100 USDT • {state.automationMode === 'MANUAL' ? 'Manuel' : state.automationMode === 'SEMI_AUTO' ? 'Yarı Otomatik' : 'Tam Otomatik'}
               </span>
-              {state.safeMode && <span className="text-xs px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-amber-300">SAFE MODE</span>}
+              {state.safeMode && <span className="text-xs px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-amber-300">GÜVENLİ MOD</span>}
             </div>            
             <div className="w-px h-6 bg-zinc-800"></div>
 

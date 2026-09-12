@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { AppState, CoinData, TradeSignal, MarketRegime, NewsIntelligence } from '../types';
 import { fetchTopUsdtMarkets } from '../lib/binancePublic';
 import { loadPaperState, mapSettingsToState, saveSettings, insertSignal, paperBuy, paperSellAll } from '../lib/cloudData';
@@ -25,32 +25,91 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isSyncing, setIsSyncing] = useState(true);
   const [tradingModal, setTradingModal] = useState<{isOpen: boolean, coin: CoinData | null}>({isOpen:false,coin:null});
 
-  const fetchPortfolio=async()=>{try{const d=await loadPaperState();setState(s=>({...s,balance:Number(d.account.balance||0),portfolio:d.portfolio,...mapSettingsToState(d.settings)}));setSignals(d.signals);}catch(e){console.error('Supabase portfolio sync failed',e)}finally{setIsSyncing(false)}};
-  const updateSettings=async(values:Partial<AppState>)=>{const before=state;const updated={...state,...values};setState(updated);try{await saveSettings(values);await fetchPortfolio()}catch(e){console.error('Supabase settings update failed',e);setState(before)}};
-  const fetchMarketData=async()=>{setIsRefreshingMarket(true);try{setMarketData(await fetchTopUsdtMarkets(50))}catch(e){console.error('Binance public market data error',e)}finally{setIsRefreshingMarket(false)}};
+  const settingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSettingsRef = useRef<Partial<AppState>>({});
+  const settingsDirtyUntilRef = useRef(0);
+  const settingsMutationVersionRef = useRef(0);
+
+  const fetchPortfolio=useCallback(async()=>{
+    try{
+      const d=await loadPaperState();
+      const preserveLocalSettings=Date.now()<settingsDirtyUntilRef.current;
+      setState(s=>({
+        ...s,
+        balance:Number(d.account.balance||0),
+        portfolio:d.portfolio,
+        ...(preserveLocalSettings?{}:mapSettingsToState(d.settings))
+      }));
+      setSignals(d.signals);
+    }catch(e){console.error('Supabase portföy eşitleme hatası',e)}finally{setIsSyncing(false)}
+  },[]);
+
+  const flushPendingSettings=useCallback(async()=>{
+    const payload=pendingSettingsRef.current;
+    pendingSettingsRef.current={};
+    if(Object.keys(payload).length===0)return;
+    const version=settingsMutationVersionRef.current;
+    try{
+      await saveSettings(payload);
+      if(version===settingsMutationVersionRef.current){
+        settingsDirtyUntilRef.current=Date.now()+1000;
+      }
+    }catch(e){
+      console.error('Supabase ayar kaydetme hatası',e);
+      if(version===settingsMutationVersionRef.current){
+        settingsDirtyUntilRef.current=0;
+        await fetchPortfolio();
+      }
+    }
+  },[fetchPortfolio]);
+
+  const updateSettings=(values:Partial<AppState>)=>{
+    // Optimistic functional update prevents stale closures from restoring older slider values.
+    setState(prev=>({...prev,...values}));
+    pendingSettingsRef.current={...pendingSettingsRef.current,...values};
+    settingsMutationVersionRef.current+=1;
+    // Keep background polling from restoring older DB values while a write is pending/in flight.
+    settingsDirtyUntilRef.current=Date.now()+5000;
+    if(settingsSaveTimerRef.current)clearTimeout(settingsSaveTimerRef.current);
+    settingsSaveTimerRef.current=setTimeout(()=>{void flushPendingSettings()},350);
+  };
+  const fetchMarketData=async()=>{setIsRefreshingMarket(true);try{setMarketData(await fetchTopUsdtMarkets(50))}catch(e){console.error('Binance genel piyasa verisi hatası',e)}finally{setIsRefreshingMarket(false)}};
 
   const forceSignalCheck=async(symbol:string)=>{
     const coin=marketData.find(c=>c.symbol===symbol);if(!coin)return;
-    // Cloud phase 1 deliberately does not fake the production Strategy Manager.
-    // Record a manual-review signal only; scanner/analysis moves to Supabase Edge Functions next.
-    const analysis=`Cloud geçişi: ${symbol}/USDT canlı Binance fiyatı ${coin.price}. Strategy/Regime/News motoru Supabase Edge Function'a taşınana kadar otomatik BUY kararı üretilmez.`;
+    // Bulut geçişinin bu aşamasında gerçek strateji motoru taklit edilmez.
+    // Yalnız manuel inceleme kaydı oluşturulur; otomatik analiz bulut arka plan fonksiyonuna taşınacaktır.
+    const analysis=`Bulut geçişi: ${symbol}/USDT canlı Binance fiyatı ${coin.price}. Strateji, piyasa rejimi ve haber motoru bulut arka plan fonksiyonuna taşınana kadar otomatik AL kararı üretilmez.`;
     try{await insertSignal({symbol,price:coin.price,opportunity:0,analysis,status:'REJECTED',source:'cloud-phase1-manual-review'});await fetchPortfolio()}catch(e){console.error(e)};
   };
 
-  useEffect(()=>{fetchPortfolio();const i=setInterval(fetchPortfolio,10000);return()=>clearInterval(i)},[]);
+  useEffect(()=>{
+    fetchPortfolio();
+    const i=setInterval(fetchPortfolio,10000);
+    return()=>{
+      clearInterval(i);
+      if(settingsSaveTimerRef.current){
+        clearTimeout(settingsSaveTimerRef.current);
+        settingsSaveTimerRef.current=null;
+      }
+      if(Object.keys(pendingSettingsRef.current).length){void flushPendingSettings()}
+    };
+  },[fetchPortfolio,flushPendingSettings]);
   useEffect(()=>{fetchMarketData();const i=setInterval(fetchMarketData,15000);return()=>clearInterval(i)},[]);
 
   const executeManualTrade=async(type:'BUY'|'SELL',symbol:string,amountUSD:number)=>{
     const coin=marketData.find(c=>c.symbol===symbol);if(!coin)throw new Error('Güncel Binance fiyatı yok');
     try{
       if(type==='BUY'){
+        if(state.safeMode) throw new Error('Güvenli mod aktif. Yeni sanal alışlar kilitli.');
+        if(state.portfolio.length>=state.maxPositions && !state.portfolio.some(p=>p.symbol===symbol)) throw new Error('Maksimum açık pozisyon sayısına ulaşıldı.');
         const cap=state.balance*((state.positionSizePercent||25)/100);
         const spend=Math.min(Math.max(0,amountUSD),cap,state.balance);
-        if(spend<1)throw new Error('Paper alış tutarı çok düşük.');
+        if(spend<1)throw new Error('Sanal alış tutarı çok düşük.');
         await paperBuy(symbol,coin.askPrice||coin.price,spend);
       }else await paperSellAll(symbol,coin.bidPrice||coin.price);
       await fetchPortfolio(); closeTradeModal();
-    }catch(e:any){alert(e?.message||'Paper işlem başarısız');}
+    }catch(e:any){alert(turkishError(e?.message)||'Sanal işlem başarısız.');}
   };
   const approveSignal=async(id:string,investmentAmount:number)=>{const s=signals.find(x=>x.id===id);if(s?.type==='BUY')await executeManualTrade('BUY',s.symbol,investmentAmount)};
   const rejectSignal=async(id:string)=>{setSignals(prev=>prev.map(s=>s.id===id?{...s,status:'REJECTED'}:s))};
@@ -61,4 +120,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   return <AppContext.Provider value={{state,marketData,signals,toggleAutoPilot:()=>updateSettings({autoPilot:!state.autoPilot,automationMode:!state.autoPilot?'FULL_AUTO':'MANUAL'}),setDailyTarget:v=>updateSettings({dailyTargetPercent:v}),setAutoPilotAmount:v=>updateSettings({autoPilotAmount:v}),setPositionSizePercent:v=>updateSettings({positionSizePercent:v}),setAutoPilotBudget:v=>updateSettings({autoPilotBudget:v}),setRiskSettings:updateSettings,toggleFavorite,approveSignal,rejectSignal,executeManualTrade,closePosition,openTradeModal,closeTradeModal,tradingModal,fetchMarketData,forceSignalCheck,isRefreshingMarket,isSyncing,marketRegime,newsIntelligence}}>{children}</AppContext.Provider>;
 }
-export const useApp=()=>{const c=useContext(AppContext);if(!c)throw new Error('useApp must be used within AppProvider');return c};
+
+function turkishError(message?:string){
+  const m=String(message||'');
+  const pairs:[RegExp,string][]=[
+    [/Authentication required/i,'Oturum açmanız gerekiyor.'],
+    [/Invalid price\/spend/i,'Fiyat veya işlem tutarı geçersiz.'],
+    [/Paper account\/settings missing/i,'Sanal hesap veya ayarlar bulunamadı.'],
+    [/SAFE MODE active/i,'Güvenli mod aktif. Yeni sanal alışlar kilitli.'],
+    [/PAPER100 RPC only supports PAPER/i,'Bu işlem yalnız sanal test ortamında kullanılabilir.'],
+    [/Maximum position count reached/i,'Maksimum açık pozisyon sayısına ulaşıldı.'],
+    [/Position size cap exceeded/i,'Pozisyon sermaye üst sınırı aşıldı.'],
+    [/Insufficient paper balance/i,'Sanal USDT bakiyesi yetersiz.'],
+    [/Invalid price/i,'Fiyat geçersiz.'],
+    [/Open paper position not found/i,'Açık sanal pozisyon bulunamadı.']
+  ];
+  for(const [re,tr] of pairs) if(re.test(m)) return tr;
+  return m;
+}
+export const useApp=()=>{const c=useContext(AppContext);if(!c)throw new Error('Uygulama bağlamı sağlayıcısı bulunamadı');return c};
