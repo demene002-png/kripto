@@ -1,0 +1,2 @@
+# kripto
+kripto para uygulaması
