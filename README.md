@@ -262,3 +262,4 @@ After the V1 schema is installed, run `supabase/migrations/002_paper_rpc.sql` in
 Auth, persistent PAPER100 data, manual paper trading, settings, portfolio display, Binance public data and read-only research/scanner views are cloud-connected.
 
 The 24/7 Strategy/Regime/News/Shadow resolver/Auto Scanner execution loop is intentionally the **next Supabase Edge Functions + Cron phase**. The frontend does not fabricate these results while that runner is not deployed.
+Vercel deployment trigger
