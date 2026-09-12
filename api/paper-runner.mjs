@@ -12,6 +12,19 @@ const BINANCE_BASES = [
   'https://api1.binance.com',
 ];
 
+
+const EXCLUDED_STABLE_BASES = new Set([
+  'USDT','USDC','FDUSD','TUSD','USDP','DAI','BUSD','USD1','USDE','USDS','PYUSD','GUSD','USDD','FRAX','LUSD','USD0','USTC'
+]);
+function baseAsset(symbol) { return symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol; }
+function eligibleSpotSymbol(symbol) {
+  if (!symbol.endsWith('USDT')) return false;
+  const base = baseAsset(symbol);
+  if (EXCLUDED_STABLE_BASES.has(base)) return false;
+  if (/(UP|DOWN|BULL|BEAR)$/.test(base)) return false;
+  return true;
+}
+
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -55,7 +68,7 @@ async function fetchBinanceJson(path, validator, label) {
   for (const base of BINANCE_BASES) {
     try {
       const response = await fetch(`${base}${path}`, {
-        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.3.4' },
+        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.3.5' },
         signal: AbortSignal.timeout(4_000),
       });
 
@@ -179,9 +192,7 @@ export default async function handler(req, res) {
 
     const all = tickers
       .filter((x) => typeof x?.symbol === 'string')
-      .filter((x) => x.symbol.endsWith('USDT'))
-      .filter((x) => !/(UP|DOWN|BULL|BEAR)USDT$/.test(x.symbol))
-      .filter((x) => !['USDCUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'DAIUSDT'].includes(x.symbol))
+      .filter((x) => eligibleSpotSymbol(x.symbol))
       .filter((x) => Number.isFinite(Number(x.quoteVolume)) && Number.isFinite(Number(x.lastPrice)))
       .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
       .slice(0, 50);

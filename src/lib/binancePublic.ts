@@ -1,7 +1,7 @@
 import type { CoinData } from '../types';
 
 const BASE = 'https://api.binance.com';
-const EXCLUDED_BASES = new Set(['USDT','USDC','FDUSD','TUSD','USDP','DAI','EUR','TRY','BRL','GBP','BUSD']);
+const EXCLUDED_BASES = new Set(['USDT','USDC','FDUSD','TUSD','USDP','DAI','BUSD','USD1','USDE','USDS','PYUSD','GUSD','USDD','FRAX','LUSD','USD0','USTC','EUR','TRY','BRL','GBP']);
 const LEVERAGED_SUFFIXES = ['UP','DOWN','BULL','BEAR'];
 
 function baseAsset(symbol:string){ return symbol.endsWith('USDT') ? symbol.slice(0,-4) : symbol; }

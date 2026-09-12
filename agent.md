@@ -525,3 +525,11 @@ Kritik proje kararı:
 - Critical Supabase operations retry up to 3 times on transient gateway/network failures.
 - Shadow open-symbol lookup is batched per user and new shadow rows are inserted in bulk.
 - PAPER100 remains cloud-only and must not send real Binance orders.
+
+## 30. v1.3.5 Portföy K/Z hassasiyeti + stablecoin filtresi (2026-09-12)
+- Portföyde coin fiyatı 1 USD altındaysa 6, 1-100 USD arasındaysa 4, daha yüksek fiyatlarda 2 ondalık gösterilir.
+- Açık pozisyon K/Z alanı küçük hareketleri görünür kılmak için 2-4 ondalık USD hassasiyetinde, yüzde K/Z ise 4 ondalıkla gösterilir.
+- Portföy üst özetine `Gerçekleşmemiş K/Z` kutusu ve son Binance fiyat güncelleme saati eklenmiştir.
+- Otomatik işlem evreninden stablecoin/stable benzeri taban varlıklar çıkarılır: USDC, FDUSD, TUSD, USDP, DAI, BUSD, USD1, USDE, USDS, PYUSD, GUSD, USDD, FRAX, LUSD, USD0, USTC ve USDT.
+- Bu filtre hem frontend Top-50 piyasa listesinde hem Vercel cloud runner seçiminde uygulanır; sistem bu varlıklarda yeni otomatik PAPER alış açmaz.
+- Filtre mevcut açık stablecoin PAPER pozisyonunu zorla kapatmaz. Kullanıcı `Sat` düğmesiyle manuel kapatabilir; böylece test portföyünde beklenmedik otomatik tasfiye yapılmaz.

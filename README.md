@@ -36,3 +36,8 @@ The cloud PAPER100 runner now validates Binance responses and automatically fall
 - Supabase gecici gateway/network hatalarinda kritik sorgular 3 kez yeniden denenir.
 - Acik golge sinyalleri tek sorguda okunur, yeni golge kayitlari toplu yazilir.
 - Amac Vercel fonksiyonunun 60 saniye sinirina yaklasmadan tamamlanmasidir.
+
+### v1.3.5
+- Portföy K/Z ve düşük fiyatlı coin gösterimi daha hassas hale getirildi.
+- Gerçekleşmemiş K/Z ve son fiyat güncelleme saati eklendi.
+- Stablecoin/stable benzeri USDT pariteleri otomatik işlem evreninden çıkarıldı (USD1 dahil).
