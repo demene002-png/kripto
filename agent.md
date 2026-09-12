@@ -428,3 +428,39 @@ Kullanıcı talebi doğrultusunda eski tekil "BTC 1h Backtest" yapısı kaldır�
    - Haber motorunun en az 50 çözülmüş shadow sinyali üzerinden A-B testi şartı geçerliliğini ve zorunluluğunu korumaktadır.
 
 
+
+## 27. Paper100 Data-Driven Calibration & Scanner Diagnostics (2026-09-12)
+This change is based on the first collected Paper100 dataset (105 legacy 1-minute shadow observations and the multi-market validation run).
+
+Critical decisions:
+- The earlier 1-minute shadow horizon is considered too noisy for meaningful News/CryptoPanic validation. New shadow observations use **15 minutes by default**, with a hard minimum of 10 minutes.
+- Existing resolved shadow rows with `horizon_minutes < 15` are retained for audit/history but are **excluded from the >=50 valid-shadow readiness/retest count**. The UI reports them separately as legacy data.
+- Only one open shadow observation per symbol is allowed. A symbol must also wait at least one full shadow horizon before another independent observation is created.
+- PAPER100 entry thresholds are now explicitly separated from production thresholds. They are intentionally looser for safe virtual data collection only:
+  - Combined PAPER100: Opportunity >= 66, Risk <= 55, Confidence >= 70.
+  - PAPER100 strategy-engine thresholds: SCALP 66/70/55, DAY 68/70/55, SWING 70/70/55 (score/confidence/maxRisk).
+  - Production/Testnet/Live reference thresholds remain unchanged in `tradingConfig.ts`.
+- PAPER100 daily profit-protection quality thresholds are 66 NORMAL, 72 CAUTION, 78 TARGET_REACHED, 86 LOCKDOWN. News VETO, PANIC veto, daily drawdown, open-risk, max-position, stop/TP/trailing, spread/fee/slippage and Safe/Kill controls remain intact.
+- PAPER100 minimum risk-sized spend is reduced to 5 USDT for the 100 USDT virtual account; this change is test-only.
+- FULL_AUTO scanner now uses a **dynamic Top-50 liquid USDT universe**, but scans it in rotating batches (default 12 symbols/minute) to control Binance request load. The entire universe is covered over successive scans instead of only the previous Top 8.
+- Auto Scanner Diagnostics records per-symbol Opportunity/Risk/Confidence, primary strategy, consensus, regime, news/VETO, Risk Manager block reasons, suggested spend and final action. This is required before any further threshold relaxation.
+- FULL_AUTO still opens at most one new Paper position per scan and selects the best risk-approved candidate from the current batch.
+- The current multi-market backtest showed materially weak out-of-sample robustness. Therefore these looser PAPER100 thresholds are for **data collection, not proof of profitability**, and must never be copied into LIVE without new robust evidence.
+- CryptoPanic/News A-B retest remains mandatory and now counts only valid >=15-minute shadow observations.
+- Paper performance analytics now counts only closing `SELL:*` rows as closed trades; BUY fee ledger rows are no longer misclassified as closed trades in win-rate/profit-factor statistics.
+
+## 28. GitHub + Supabase + Vercel cloud architecture (2026-09-12)
+This is now a critical project architecture decision.
+- GitHub is the canonical source repository and version history.
+- Supabase is the persistent backend platform: Auth + PostgreSQL + later Edge Functions/Cron/Realtime.
+- Vercel hosts the Vite/React web application from GitHub.
+- Google AI Studio is no longer part of the development/deployment pipeline.
+- Local SQLite/custom JWT login is deprecated for the cloud deployment. Supabase Auth is the active login system.
+- Browser environment variables are `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Never expose `sb_secret_*`, service-role, Binance private keys, or other privileged secrets through VITE variables.
+- PAPER100 account/settings/positions/signals/research records are stored in Supabase PostgreSQL under RLS.
+- Manual PAPER100 buy/sell uses authenticated Supabase RPCs and remains simulation-only.
+- Binance public Spot data may be fetched without private API credentials.
+- Cloud migration must NOT fabricate Strategy/Regime/News/Scanner results if the corresponding runner is not deployed. Missing runner => explicit no-data/pending state.
+- 24/7 Strategy Manager, Market Regime, News/VETO, Shadow resolver, Auto Scanner and backtest workers will be moved to Supabase Edge Functions + Cron in the next cloud phase.
+- Real Binance order execution remains outside the current cloud migration and must not be enabled implicitly.
+- CryptoPanic/news A-B retest remains mandatory after the cloud runner is collecting valid >=15 minute shadow samples.

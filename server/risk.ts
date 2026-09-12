@@ -1,6 +1,7 @@
 import { buildStrategyDecision } from './strategy';
 import { getDb } from './db';
 import { getTopUsdtMarkets } from './market';
+import { PAPER100_TEST_MODE, PAPER100_PROFIT_THRESHOLDS, combinedThresholds } from './tradingConfig';
 
 export type RiskProfile = 'CONSERVATIVE'|'BALANCED'|'AGGRESSIVE'|'CUSTOM';
 
@@ -89,17 +90,20 @@ export async function buildRiskPlan(userId:number,symbol:string, overrides?:{equ
   const cautionAt=Math.max(0.5,target-1);
   const lockdownAt=target+2;
   const profitProtectionLevel = dailyEffective.dailyPct >= lockdownAt ? 'LOCKDOWN' : dailyEffective.dailyPct >= target ? 'TARGET_REACHED' : dailyEffective.dailyPct >= cautionAt ? 'CAUTION' : 'NORMAL';
-  const qualityThreshold = profitProtectionLevel==='LOCKDOWN'?92:profitProtectionLevel==='TARGET_REACHED'?88:profitProtectionLevel==='CAUTION'?84:80;
+  const prodQuality = profitProtectionLevel==='LOCKDOWN'?92:profitProtectionLevel==='TARGET_REACHED'?88:profitProtectionLevel==='CAUTION'?84:80;
+  const qualityThreshold = PAPER100_TEST_MODE ? PAPER100_PROFIT_THRESHOLDS[profitProtectionLevel as keyof typeof PAPER100_PROFIT_THRESHOLDS] : prodQuality;
+  const combined = combinedThresholds();
   const blocks:string[]=[];
   if(analysis.veto.active) blocks.push(analysis.veto.reason);
   if(analysis.opportunity<qualityThreshold) blocks.push(`Opportunity ${analysis.opportunity}; gerekli eşik ${qualityThreshold}.`);
-  if(analysis.risk>45) blocks.push(`Risk skoru ${analysis.risk}/100 ile yüksek.`);
-  if(analysis.confidence<70) blocks.push(`Confidence ${analysis.confidence}/100 ile yetersiz.`);
+  if(analysis.risk>combined.maxRisk) blocks.push(`Risk skoru ${analysis.risk}/100; maksimum ${combined.maxRisk}.`);
+  if(analysis.confidence<combined.confidence) blocks.push(`Confidence ${analysis.confidence}/100; gerekli ${combined.confidence}.`);
   if(dailyEffective.openPositions>=settings.maxPositions) blocks.push(`Maksimum ${settings.maxPositions} açık pozisyon sınırı dolu.`);
   if(dailyEffective.openRiskPct>=settings.maxOpenRiskPercent) blocks.push(`Toplam açık risk limiti %${settings.maxOpenRiskPercent.toFixed(2)} dolu.`);
   if(dailyEffective.dailyPct<=-settings.maxDailyLossPercent) blocks.push(`Günlük maksimum zarar limiti -%${settings.maxDailyLossPercent.toFixed(2)} aşıldı.`);
   if(netTargetPct<0.35) blocks.push(`Komisyon/spread/slippage sonrası net hedef çok düşük (%${netTargetPct.toFixed(2)}).`);
-  if(suggestedSpend<10) blocks.push('Risk bazlı pozisyon tutarı minimum işlem eşiğinin altında.');
+  const minPaperSpend=PAPER100_TEST_MODE?5:10;
+  if(suggestedSpend<minPaperSpend) blocks.push(`Risk bazlı pozisyon tutarı minimum işlem eşiğinin altında (${minPaperSpend} USDT).`);
 
   return {
     allowed: blocks.length===0,
@@ -108,6 +112,7 @@ export async function buildRiskPlan(userId:number,symbol:string, overrides?:{equ
     settings,
     daily:{...dailyEffective, profitProtectionLevel, qualityThreshold},
     analysis:{opportunity:analysis.opportunity,risk:analysis.risk,confidence:analysis.confidence,regime:analysis.regime.label,veto:analysis.veto,primaryStrategy:analysis.primaryStrategy,consensusCount:analysis.consensusCount,engines:analysis.engines,news:analysis.news},
+    thresholds:{...combined,qualityThreshold,mode:PAPER100_TEST_MODE?'PAPER100_TEST':'PRODUCTION'},
     execution:{
       entry:Number(price.toFixed(10)),
       suggestedSpend:Number(suggestedSpend.toFixed(2)),

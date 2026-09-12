@@ -18,6 +18,7 @@ import { executeManagedTestnetBuy, sellManagedTestnetPosition, reconcileAllTestn
 import { getLiveReadiness, getLiveApiPermissionPreflight, runEmergencyExitDrill } from './server/livePreflight';
 import { armLiveSession, disarmLiveSession, liveArmingStatus, executeControlledLiveBuy, closeControlledLivePosition, reconcileAllLivePositions } from './server/liveExecution';
 import { recordShadowSignal, runShadowScan, resolveMatureShadowSignals, runBacktest, runMultiBacktest, getBacktestProgress, getResearchAnalytics } from './server/research';
+import { combinedThresholds, PAPER100_TEST_MODE } from './server/tradingConfig';
 
 const PAPER_ONLY_DEMO = true;
 const PAPER_START_BALANCE = 100;
@@ -41,6 +42,9 @@ async function startServer() {
   app.disable('x-powered-by');
   app.use(express.json({ limit: '256kb' }));
   await getDb();
+
+  let autoScanCursor=0;
+  const autoDiagnostics=new Map<number, any>();
 
   let ai: GoogleGenAI | null = null;
   if (process.env.GEMINI_API_KEY) {
@@ -174,6 +178,15 @@ async function startServer() {
   });
   app.post('/api/execution/release', requireAuth, async (req:any,res) => {
     releaseKillSwitch(); res.json({success:true, ...(await getExecutionSafety(req.userId))});
+  });
+
+  app.get('/api/autopilot/diagnostics', requireAuth, async (req:any,res) => {
+    const th=combinedThresholds();
+    res.json(autoDiagnostics.get(Number(req.userId)) || {
+      generatedAt:0, universeSize:50, batchSize:Number(process.env.AUTO_SCAN_BATCH_SIZE||12),
+      thresholds:{...th,mode:PAPER100_TEST_MODE?'PAPER100_TEST':'PRODUCTION'},
+      scanned:0,buyCandidates:0,riskAllowed:0,executed:0,blocked:0,rows:[]
+    });
   });
 
   app.get('/api/market', async (req, res) => {
@@ -392,26 +405,81 @@ async function startServer() {
       const db=await getDb();
       const users=await db.all("SELECT user_id FROM settings WHERE automationMode = 'FULL_AUTO' AND executionMode = 'PAPER' AND safeMode = 0");
       if(!users.length) return;
-      const markets=await getTopUsdtMarkets(8);
+
+      const universe=await getTopUsdtMarkets(50);
+      const batchSize=Math.max(5,Math.min(20,Number(process.env.AUTO_SCAN_BATCH_SIZE||12)));
+      const batch=[] as typeof universe;
+      for(let i=0;i<Math.min(batchSize,universe.length);i++) batch.push(universe[(autoScanCursor+i)%universe.length]);
+      autoScanCursor=universe.length?(autoScanCursor+batch.length)%universe.length:0;
+      const th=combinedThresholds();
+
       for(const u of users){
-        const safety=await getExecutionSafety(Number(u.user_id));
-        if(!safety.newEntriesAllowed) continue;
-        for(const m of markets){
+        const userId=Number(u.user_id);
+        const safety=await getExecutionSafety(userId);
+        const rows:any[]=[];
+        let buyCandidates=0, riskAllowed=0, executed=0;
+        const executable:any[]=[];
+
+        if(!safety.newEntriesAllowed){
+          autoDiagnostics.set(userId,{generatedAt:Date.now(),universeSize:universe.length,batchSize:batch.length,thresholds:{...th,mode:'PAPER100_TEST'},scanned:0,buyCandidates:0,riskAllowed:0,executed:0,blocked:batch.length,globalBlock:safety.reasons,rows:[]});
+          continue;
+        }
+
+        for(const m of batch){
           const symbol=String(m.symbol);
-          const exists=await db.get('SELECT 1 FROM portfolio_positions WHERE user_id = ? AND symbol = ?',[u.user_id,symbol]);
-          if(exists) continue;
+          const existing=await db.get('SELECT 1 FROM portfolio_positions WHERE user_id = ? AND symbol = ?',[userId,symbol]);
+          if(existing){ rows.push({symbol,finalAction:'SKIP',reason:'Açık pozisyon zaten var.'}); continue; }
           try{
             const decision=await buildStrategyDecision(symbol);
-            if(decision.action!=='BUY_CANDIDATE'||decision.veto?.active) continue;
-            const market=await getUsdtMarket(symbol);
-            await executeSpotBuy(Number(u.user_id),symbol,0,market.askPrice||market.price,true);
-            await db.run('INSERT INTO signals_log (id,user_id,symbol,type,price,aiScore,analysis,status,source,timestamp) VALUES (?,?,?,?,?,?,?,?,?,?)',
-              [crypto.randomUUID(),u.user_id,symbol,'BUY',market.askPrice||market.price,decision.opportunity,`V10 FULL_AUTO PAPER • ${decision.primaryStrategy} • teyit ${decision.consensusCount}/3`,'EXECUTED','v10-full-auto-paper',Date.now()]);
-            break; // one new position per scan/user
-          }catch(e:any){ console.warn('V10 auto candidate skipped',symbol,e.message); }
+            const base:any={symbol,opportunity:decision.opportunity,risk:decision.risk,confidence:decision.confidence,primaryStrategy:decision.primaryStrategy,consensusCount:decision.consensusCount,marketRegime:decision.regime?.label,newsLevel:decision.news?.level,veto:Boolean(decision.veto?.active),thresholds:decision.thresholds};
+            if(decision.action!=='BUY_CANDIDATE'||decision.veto?.active){
+              const reasons:string[]=[];
+              if(decision.veto?.active) reasons.push(decision.veto.reason||'VETO aktif');
+              if(decision.consensusCount<=0) reasons.push('Hiçbir strateji motoru BUY_CANDIDATE değil.');
+              if(decision.opportunity<th.opportunity) reasons.push(`Opportunity ${decision.opportunity} < ${th.opportunity}`);
+              if(decision.risk>th.maxRisk) reasons.push(`Risk ${decision.risk} > ${th.maxRisk}`);
+              if(decision.confidence<th.confidence) reasons.push(`Confidence ${decision.confidence} < ${th.confidence}`);
+              rows.push({...base,finalAction:'NO_TRADE',riskAllowed:false,reason:reasons.join(' ')||'Birleşik karar uygun değil.'});
+              continue;
+            }
+            buyCandidates++;
+            const plan=await buildRiskPlan(userId,symbol);
+            if(!plan.allowed){
+              rows.push({...base,finalAction:'BLOCKED',riskAllowed:false,reason:plan.blocks.join(' '),suggestedSpend:plan.execution?.suggestedSpend});
+              continue;
+            }
+            riskAllowed++;
+            const candidate={...base,finalAction:'READY',riskAllowed:true,reason:'Strategy + Risk Manager uygun.',suggestedSpend:plan.execution?.suggestedSpend,score:decision.opportunity-decision.risk*.35+decision.confidence*.20};
+            rows.push(candidate); executable.push({symbol,decision,market:m,diag:candidate});
+          }catch(e:any){
+            rows.push({symbol,finalAction:'ERROR',riskAllowed:false,reason:e.message});
+          }
         }
+
+        if(executable.length){
+          executable.sort((a,b)=>b.diag.score-a.diag.score);
+          const best=executable[0];
+          try{
+            const market=await getUsdtMarket(best.symbol);
+            const result=await executeSpotBuy(userId,best.symbol,0,market.askPrice||market.price,true);
+            executed=1;
+            const r=rows.find(x=>x.symbol===best.symbol&&x.finalAction==='READY');
+            if(r){r.finalAction='EXECUTED';r.actualSpend=result.spend;r.reason='Paper BUY açıldı.';}
+            await db.run('INSERT INTO signals_log (id,user_id,symbol,type,price,aiScore,analysis,status,source,timestamp) VALUES (?,?,?,?,?,?,?,?,?,?)',
+              [crypto.randomUUID(),userId,best.symbol,'BUY',market.askPrice||market.price,best.decision.opportunity,`PAPER100 FULL_AUTO • ${best.decision.primaryStrategy} • teyit ${best.decision.consensusCount}/3`,'EXECUTED','paper100-auto-scanner',Date.now()]);
+          }catch(e:any){
+            const r=rows.find(x=>x.symbol===best.symbol&&x.finalAction==='READY');
+            if(r){r.finalAction='BLOCKED';r.reason=`Execution: ${e.message}`;}
+          }
+        }
+
+        autoDiagnostics.set(userId,{
+          generatedAt:Date.now(),universeSize:universe.length,batchSize:batch.length,nextCursor:autoScanCursor,
+          thresholds:{...th,mode:PAPER100_TEST_MODE?'PAPER100_TEST':'PRODUCTION'},
+          scanned:rows.length,buyCandidates,riskAllowed,executed,blocked:rows.filter(x=>!['EXECUTED','READY'].includes(x.finalAction)).length,rows
+        });
       }
-    }catch(e){ console.error('V10 full-auto paper scanner error',e); }
+    }catch(e){ console.error('Paper100 auto scanner error',e); }
     finally{autoBusy=false;}
   },60_000);
 

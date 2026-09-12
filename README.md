@@ -227,3 +227,38 @@ This package is intentionally hard-locked to PAPER execution for safe evaluation
 - MANUAL, SEMI_AUTO and FULL_AUTO can be tested, but every execution remains virtual PAPER.
 
 This build is the recommended first runtime test before Testnet or any live-capital discussion.
+
+## Paper100 calibrated test update (v1.1.2)
+- New Shadow horizon: 15 minutes (minimum 10); old 1-minute rows are shown as legacy and excluded from readiness.
+- PAPER100-only data-collection thresholds: Opportunity >= 66, Risk <= 55, Confidence >= 70.
+- Dynamic Top-50 scanner with rotating 12-symbol batches per minute.
+- New Auto Scanner Diagnostics panel shows exactly why each candidate was accepted or blocked.
+- Production/Testnet/Live reference thresholds are not loosened by this calibration.
+
+## Supabase + Vercel Cloud Migration v1.2.0
+
+The active cloud architecture is now **GitHub + Supabase + Vercel**.
+
+- Supabase Auth replaces the local SQLite username/password login.
+- `paper_accounts`, `paper_positions`, `trading_settings`, `signals`, `shadow_signals`, backtests and scanner diagnostics are read from Supabase PostgreSQL.
+- PAPER100 manual buy/sell uses authenticated Supabase RPC functions from `supabase/migrations/002_paper_rpc.sql`.
+- Binance public Spot market data is fetched without private API credentials.
+- Vercel hosts the Vite frontend.
+- SQLite/Express files are retained only as historical migration reference and are not included in the Vercel build.
+- Real Binance orders are not enabled in this migration.
+
+### Required Vercel environment variables
+
+`VITE_SUPABASE_URL`
+
+`VITE_SUPABASE_PUBLISHABLE_KEY`
+
+### Required database step
+
+After the V1 schema is installed, run `supabase/migrations/002_paper_rpc.sql` in Supabase SQL Editor. This adds atomic authenticated PAPER100 buy/sell RPC functions.
+
+### Current cloud migration boundary
+
+Auth, persistent PAPER100 data, manual paper trading, settings, portfolio display, Binance public data and read-only research/scanner views are cloud-connected.
+
+The 24/7 Strategy/Regime/News/Shadow resolver/Auto Scanner execution loop is intentionally the **next Supabase Edge Functions + Cron phase**. The frontend does not fabricate these results while that runner is not deployed.

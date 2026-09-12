@@ -3,6 +3,7 @@ import { getDb } from './db';
 import { getKlines, getTopUsdtMarkets, getUsdtMarket } from './market';
 import { scoreTimeframe } from './analysis';
 import { buildStrategyDecision, StrategyName, STRATEGY_TIMEFRAMES } from './strategy';
+import { combinedThresholds } from './tradingConfig';
 
 type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
 function clamp(v:number,min=0,max=100){return Math.max(min,Math.min(max,v));}
@@ -14,23 +15,22 @@ function percentile(xs:number[],p:number){if(!xs.length)return 0; const a=[...xs
 export async function recordShadowSignal(userId:number,symbol:string, decision?:any){
   const cleanSymbol=symbol.toUpperCase();
   const db=await getDb();
+  const horizonMin=Math.max(10,Math.min(24*60,Number(process.env.SHADOW_HORIZON_MINUTES||15)));
 
-  // 1) Duplicate prevention: if an OPEN shadow signal exists for this coin, return skipped
+  // One independent observation per symbol at a time.
   const openExisting = await db.get(
     "SELECT id FROM shadow_signals WHERE user_id = ? AND symbol = ? AND status = 'OPEN' LIMIT 1",
     [userId, cleanSymbol]
   );
-  if (openExisting) {
-    return { skipped: true, reason: 'OPEN_SHADOW_EXISTS', symbol: cleanSymbol };
-  }
+  if (openExisting) return { skipped:true, reason:'OPEN_SHADOW_EXISTS', symbol:cleanSymbol };
 
-  // 2) Cooldown prevention: at least 1 minute between shadow signals for the same symbol
+  // After resolution, wait at least one horizon before creating the next observation.
   const lastCreated = await db.get(
     "SELECT created_at FROM shadow_signals WHERE user_id = ? AND symbol = ? ORDER BY created_at DESC LIMIT 1",
     [userId, cleanSymbol]
   );
-  if (lastCreated && (Date.now() - Number(lastCreated.created_at)) < 1 * 60_000) {
-    return { skipped: true, reason: 'OPEN_SHADOW_EXISTS', symbol: cleanSymbol };
+  if (lastCreated && (Date.now() - Number(lastCreated.created_at)) < horizonMin * 60_000) {
+    return { skipped:true, reason:'SHADOW_COOLDOWN', symbol:cleanSymbol };
   }
 
   const d=decision || await buildStrategyDecision(cleanSymbol);
@@ -41,8 +41,8 @@ export async function recordShadowSignal(userId:number,symbol:string, decision?:
   const risk0=Math.round(clamp(Number(d.risk||0)-Number(n.riskAdjustment||0)));
   const conf0=Math.round(clamp(Number(d.confidence||0)-Number(n.confidenceAdjustment||0)));
   const baseVeto=!!d.baseAnalysis?.veto?.active;
-  const withoutNews=!baseVeto && Number(d.consensusCount||0)>0 && opp0>=80 && risk0<=45 && conf0>=72 ? 'BUY_CANDIDATE':'NO_TRADE';
-  const horizonMin=Math.max(1,Math.min(24*60,Number(process.env.SHADOW_HORIZON_MINUTES||1)));
+  const th=combinedThresholds();
+  const withoutNews=!baseVeto && Number(d.consensusCount||0)>0 && opp0>=th.opportunity && risk0<=th.maxRisk && conf0>=th.confidence ? 'BUY_CANDIDATE':'NO_TRADE';
   const newsCost=Math.max(0,Number(process.env.NEWS_COST_PER_ANALYSIS_USD||0));
   const aiCost=Math.max(0,Number(process.env.AI_COST_PER_ANALYSIS_USD||0));
   const id=crypto.randomUUID(); const now=Date.now();
@@ -55,9 +55,9 @@ export async function recordShadowSignal(userId:number,symbol:string, decision?:
   return {id,symbol:cleanSymbol,withNews:d.action,withoutNews,resolveAt:now+horizonMin*60_000};
 }
 
-export async function runShadowScan(userId:number,limit=8){
+export async function runShadowScan(userId:number,limit=10){
   const { getTopUsdtMarkets } = await import('./market');
-  const markets=await getTopUsdtMarkets(Math.max(1,Math.min(20,limit)));
+  const markets=await getTopUsdtMarkets(Math.max(1,Math.min(50,limit)));
   const rows:any[]=[];
   for(const m of markets){
     try{const d=await buildStrategyDecision(m.symbol); rows.push({decision:d,shadow:await recordShadowSignal(userId,m.symbol,d)});}catch(e:any){rows.push({symbol:m.symbol,error:e.message});}
@@ -591,7 +591,8 @@ export async function runBacktest(userId:number,symbol:string,interval='1h'){
 export async function getResearchAnalytics(userId:number){
   await resolveMatureShadowSignals(userId);
   const db=await getDb();
-  const rows=await db.all(`SELECT * FROM shadow_signals WHERE user_id=? AND status='RESOLVED' ORDER BY resolved_at DESC LIMIT 2000`,[userId]);
+  const rows=await db.all(`SELECT * FROM shadow_signals WHERE user_id=? AND status='RESOLVED' AND horizon_minutes>=15 ORDER BY resolved_at DESC LIMIT 2000`,[userId]);
+  const legacyResolvedSignals=Number((await db.get(`SELECT COUNT(*) c FROM shadow_signals WHERE user_id=? AND status='RESOLVED' AND horizon_minutes<15`,[userId]))?.c||0);
   const costs=rows.reduce((s:any,r:any)=>({news:s.news+Number(r.news_cost_usd||0),ai:s.ai+Number(r.ai_cost_usd||0)}),{news:0,ai:0});
   const diff=rows.filter((r:any)=>r.decision_with_news!==r.decision_without_news);
   const savedLoss=diff.filter((r:any)=>r.decision_with_news==='NO_TRADE'&&Number(r.return_pct)<0).reduce((s:number,r:any)=>s+Math.abs(Number(r.return_pct)),0);
@@ -604,7 +605,7 @@ export async function getResearchAnalytics(userId:number){
   const bucketStats=Object.fromEntries(Object.entries(buckets).map(([k,v]:any)=>[k,{count:v.length,avgReturnPct:Number(avg(v).toFixed(3)),winRatePct:Number((v.filter((x:number)=>x>0).length/v.length*100).toFixed(1))}]));
   const latestBacktests=await db.all('SELECT id,symbol,interval,created_at,metrics_json,monte_carlo_json FROM backtest_runs WHERE user_id=? ORDER BY created_at DESC LIMIT 10',[userId]);
 
-  const paperTrades=await db.all('SELECT type,realized_pnl,timestamp FROM trade_history WHERE user_id=? ORDER BY timestamp ASC',[userId]);
+  const paperTrades=await db.all("SELECT type,realized_pnl,timestamp FROM trade_history WHERE user_id=? AND type LIKE 'SELL:%' ORDER BY timestamp ASC",[userId]);
   const testnetTrades=await db.all('SELECT side,realized_pnl,created_at FROM testnet_trade_history WHERE user_id=? ORDER BY created_at ASC',[userId]);
   function envStats(rows:any[]){
     const exits=rows.filter((r:any)=>Number(r.realized_pnl||0)!==0);
@@ -633,7 +634,7 @@ export async function getResearchAnalytics(userId:number){
     verdict: rows.length<50?'COLLECT_MORE_SHADOW':walkForwardReady.length<3?'RUN_MORE_WALK_FORWARD':envStats(testnetTrades).closedTrades<20?'COLLECT_MORE_TESTNET':'REVIEW_FOR_V10'
   };
   return {
-    resolvedSignals:rows.length, openSignals:Number((await db.get("SELECT COUNT(*) c FROM shadow_signals WHERE user_id=? AND status='OPEN'",[userId]))?.c||0),
+    resolvedSignals:rows.length, legacyResolvedSignals, openSignals:Number((await db.get("SELECT COUNT(*) c FROM shadow_signals WHERE user_id=? AND status='OPEN'",[userId]))?.c||0),
     scoreBuckets:bucketStats,
     strategyAttribution:groupStats(strategyGroups),
     regimeAttribution:groupStats(regimeGroups),
@@ -648,7 +649,7 @@ export async function getResearchAnalytics(userId:number){
     mandatoryTestChecklist:[
       'CryptoPanic / News Engine A-B retest: haber açık vs haber etkisi nötr karşılaştırılacak.',
       'API + AI maliyeti, engellenen zarar ve kaçırılan kâr birlikte değerlendirilecek.',
-      'En az 50 çözülmüş shadow sinyali olmadan haber sağlayıcısı hakkında kalıcı karar verilmeyecek.',
+      'En az 50 geçerli (>=15 dk horizon) çözülmüş shadow sinyali olmadan haber sağlayıcısı hakkında kalıcı karar verilmeyecek.',
       'Backtest tek başına yeterli kabul edilmeyecek; dry-run/shadow ve Monte Carlo birlikte incelenecek.',
       'Walk-forward / out-of-sample sonucu en az birkaç sembol-zaman diliminde pozitif ve tutarlı olmadan eşikler canlı sermaye için onaylanmayacak.',
       'Paper ve Testnet sonuçları ayrı izlenecek; Testnet gerçekleşmiş performans Paper ile çelişiyorsa neden bulunmadan ilerlenmeyecek.'

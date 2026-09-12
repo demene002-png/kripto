@@ -1,6 +1,7 @@
 import { buildV2Analysis, scoreTimeframe } from './analysis';
 import { getKlines } from './market';
 import { buildNewsIntelligence } from './news';
+import { engineThresholds, combinedThresholds, PAPER100_TEST_MODE } from './tradingConfig';
 
 export type StrategyName = 'SCALP'|'DAY'|'SWING';
 export type EngineVerdict = 'BUY_CANDIDATE'|'WATCH'|'NO_TRADE';
@@ -67,9 +68,7 @@ function engine(
   let confidence = clamp(base.confidence*.42 + alignment*.38 + clamp(adx)*.20 - Math.max(0,base.risk-35)*.25);
   const risk = clamp(base.risk + Math.max(0,55-alignment)*.35 + Math.max(0,atr-2)*2 + (name==='SCALP'?spreadPenalty*.55:spreadPenalty*.25));
 
-  const minScore=name==='SCALP'?82:name==='DAY'?80:78;
-  const minConfidence=name==='SCALP'?76:name==='DAY'?72:70;
-  const maxRisk=name==='SCALP'?40:name==='DAY'?45:48;
+  const { minScore, minConfidence, maxRisk } = engineThresholds(name);
   const regimeBlocked=base.regime.label==='PANIC' || (name==='SWING' && base.regime.label==='BEAR');
   const eligible=!regimeBlocked && score>=minScore && confidence>=minConfidence && risk<=maxRisk;
   const watch=!regimeBlocked && !eligible && score>=minScore-8 && confidence>=minConfidence-10 && risk<=maxRisk+10;
@@ -109,7 +108,8 @@ export async function buildStrategyDecision(symbol:string){
   const risk=Math.round(clamp(avg([base.risk,primary.risk]) - (consensusCount>=2?3:0) + conflictPenalty + news.score.riskAdjustment));
   const confidence=Math.round(clamp(avg([base.confidence,primary.confidence]) + agreementBonus - conflictPenalty + news.score.confidenceAdjustment));
   const veto=base.veto.active ? base.veto : news.veto.active ? news.veto : {active:false,reason:''};
-  const action=!veto.active && consensusCount>0 && opportunity>=80 && risk<=45 && confidence>=72 ? 'BUY_CANDIDATE' : 'NO_TRADE';
+  const combined=combinedThresholds();
+  const action=!veto.active && consensusCount>0 && opportunity>=combined.opportunity && risk<=combined.maxRisk && confidence>=combined.confidence ? 'BUY_CANDIDATE' : 'NO_TRADE';
   return {
     symbol:upper,
     action,
@@ -125,6 +125,7 @@ export async function buildStrategyDecision(symbol:string){
     timeframes:frames,
     baseAnalysis:base,
     news,
+    thresholds:{...combined,mode:PAPER100_TEST_MODE?'PAPER100_TEST':'PRODUCTION'},
     summary: action==='BUY_CANDIDATE'
       ? `${primary.name} birincil motor; ${consensusCount}/3 motor BUY_CANDIDATE. Haber seviyesi ${news.level}. Birleşik karar uygun.`
       : `${primary.name} en güçlü motor; BUY teyidi ${consensusCount}/3. Haber seviyesi ${news.level}. NO TRADE.`

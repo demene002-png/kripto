@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Activity, BrainCircuit, Wallet, Settings2 } from "lucide-react";
+import { BrainCircuit, Settings2, LogOut } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { formatCurrency } from "../lib/utils";
+import { supabase } from "../lib/supabase";
 import SettingsModal from "./SettingsModal";
 
 export default function Header() {
@@ -29,6 +29,7 @@ export default function Header() {
             </div>            
             <div className="w-px h-6 bg-zinc-800"></div>
 
+            <button onClick={()=>supabase.auth.signOut()} title="Çıkış" className="p-2 text-zinc-400 hover:text-rose-300 hover:bg-zinc-800 rounded-lg transition-colors"><LogOut size={19}/></button>
             <button 
               onClick={() => setIsSettingsOpen(true)}
               className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-lg transition-colors"
