@@ -446,7 +446,7 @@ Critical decisions:
 - Auto Scanner Diagnostics records per-symbol Opportunity/Risk/Confidence, primary strategy, consensus, regime, news/VETO, Risk Manager block reasons, suggested spend and final action. This is required before any further threshold relaxation.
 - FULL_AUTO still opens at most one new Paper position per scan and selects the best risk-approved candidate from the current batch.
 - The current multi-market backtest showed materially weak out-of-sample robustness. Therefore these looser PAPER100 thresholds are for **data collection, not proof of profitability**, and must never be copied into LIVE without new robust evidence.
-- CryptoPanic/News A-B retest remains mandatory and now counts only valid >=15-minute shadow observations.
+- CryptoPanic/News A-B retest remains mandatory; PAPER100 hızlı test sürümünde geçerli örnekler >=1 dakikalık shadow/gölge gözlemleridir.
 - Paper performance analytics now counts only closing `SELL:*` rows as closed trades; BUY fee ledger rows are no longer misclassified as closed trades in win-rate/profit-factor statistics.
 
 ## 28. GitHub + Supabase + Vercel cloud architecture (2026-09-12)
@@ -463,7 +463,7 @@ This is now a critical project architecture decision.
 - Cloud migration must NOT fabricate Strategy/Regime/News/Scanner results if the corresponding runner is not deployed. Missing runner => explicit no-data/pending state.
 - 24/7 Strategy Manager, Market Regime, News/VETO, Shadow resolver, Auto Scanner and backtest workers will be moved to Supabase Edge Functions + Cron in the next cloud phase.
 - Real Binance order execution remains outside the current cloud migration and must not be enabled implicitly.
-- CryptoPanic/news A-B retest remains mandatory after the cloud runner is collecting valid >=15 minute shadow samples.
+- CryptoPanic/news A-B retest remains mandatory after the cloud runner is collecting valid >=1 minute PAPER100 test shadow samples.
 
 ## Supabase Settings Synchronization Fix — 2026-09-12
 - PAPER100 settings UI previously issued one Supabase write per slider movement and then reloaded the full settings row after every write. Concurrent responses could arrive out of order and overwrite a newer local slider value with an older database snapshot.
@@ -484,3 +484,24 @@ Kritik proje kararı:
 - `automationMode` açıkça gönderilmişse eski `autoPilot` uyumluluk alanı bu modu MANUAL'a geri çeviremez; Yarı Otomatik modu kalıcı olarak doğru kaydedilir.
 - Bu sürüm yalnız 100 USDT sanal testtir. Gerçek Binance emirleri kapalıdır.
 - Bu aşamada bulut arka plan otomatik tarayıcısı/strateji motoru henüz devrede değilse arayüz bunu açıkça Türkçe olarak belirtir ve sahte sonuç üretmez.
+
+
+## Paper100 1 Dakikalık Gölge Testi (2026-09-12)
+- Bulut/Supabase PAPER100 testinde gölge sinyali değerlendirme ufku **1 dakika** olarak ayarlanmıştır.
+- Bu karar yalnız hızlı veri toplama/test amacı taşır; 1 dakikalık sonuçların yüksek piyasa gürültüsü içerdiği kabul edilir ve canlı sermaye uygunluğu için tek başına kanıt sayılmaz.
+- Geçerli CryptoPanic/Haber Motoru yeniden test örneklemi bu test sürümünde `horizon_minutes >= 1` kayıtları sayar ve yine en az 50 çözülmüş örnek ister.
+- Supabase `trading_settings.shadow_horizon_minutes` varsayılanı 1 dakikadır; mevcut kullanıcı ayarları migration ile 1'e çekilir.
+- Açık eski gölge kayıtlarının ufku 1 dakikaya normalize edilir.
+- ÖNEMLİ: Bu süre değişikliği kendi başına gölge sinyali üretmez veya çözmez. 7/24 Supabase Edge Function/Cron tarayıcısı ve resolver devreye alınmadan Doğrulama Laboratuvarı yalnız veritabanındaki mevcut kayıtları okur.
+- Önceki 15 dakikalık varsayılan bu PAPER100 hızlı test kararıyla geçici olarak superseded edilmiştir.
+
+
+## 29. 7/24 PAPER100 Cloud Runner + Manuel Kapatma (2026-09-12)
+- Vercel serverless `/api/paper-runner` Supabase Cron tarafından her dakika tetiklenir.
+- Runner Top-50 likit USDT evrenini dönüşümlü tarar; SCALP 15m, DAY 1h, SWING 4h verilerinden fırsat/risk/güven puanı üretir.
+- FULL_AUTO + safe_mode=false olduğunda risk/sermaye limitlerini geçen en iyi aday için tur başına en fazla 1 PAPER alış açılır. Gerçek Binance emri yoktur.
+- Açık PAPER pozisyonlar stop, TP1, TP2 ve trailing kurallarıyla her dakika yönetilir.
+- Kullanıcı arayüzde açık pozisyon yanındaki `Sat` butonuyla istediği zaman pozisyonu tamamen manuel kapatabilir; güvenli mod manuel risk azaltıcı satışı engellemez.
+- Gölge sinyalleri otomatik üretilir ve 1 dakika sonra otomatik çözülür.
+- Otomatik worker servis anahtarı yalnız Vercel server-side `SUPABASE_SECRET_KEY` değişkeninde tutulur; VITE değişkenine konmaz.
+- Supabase Cron endpoint'i yalnız PAPER simülasyonunu tetikler ve DB lock sayesinde 45 saniyeden sık çalışamaz.

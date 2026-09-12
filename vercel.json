@@ -1,6 +1,4 @@
 {
-  "framework": "vite",
-  "rewrites": [
-    { "source": "/((?!assets/).*)", "destination": "/index.html" }
-  ]
+  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }],
+  "functions": { "api/paper-runner.mjs": { "maxDuration": 60 } }
 }

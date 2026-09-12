@@ -15,7 +15,7 @@ function percentile(xs:number[],p:number){if(!xs.length)return 0; const a=[...xs
 export async function recordShadowSignal(userId:number,symbol:string, decision?:any){
   const cleanSymbol=symbol.toUpperCase();
   const db=await getDb();
-  const horizonMin=Math.max(10,Math.min(24*60,Number(process.env.SHADOW_HORIZON_MINUTES||15)));
+  const horizonMin=Math.max(1,Math.min(24*60,Number(process.env.SHADOW_HORIZON_MINUTES||1)));
 
   // One independent observation per symbol at a time.
   const openExisting = await db.get(
@@ -97,7 +97,7 @@ async function resolveOne(row:any, candlesCache?: Map<string, any[]>){
 
 export async function resolveMatureShadowSignals(userId?:number){
   const db=await getDb();
-  // Normalize old lingering signals with >1 min horizon to 1 minute
+  // Test mode: normalize lingering open signals to the 1-minute shadow horizon
   try {
     await db.run("UPDATE shadow_signals SET horizon_minutes = 1, resolve_at = created_at + 60000 WHERE status = 'OPEN' AND resolve_at > created_at + 60000");
   } catch {}
@@ -591,8 +591,8 @@ export async function runBacktest(userId:number,symbol:string,interval='1h'){
 export async function getResearchAnalytics(userId:number){
   await resolveMatureShadowSignals(userId);
   const db=await getDb();
-  const rows=await db.all(`SELECT * FROM shadow_signals WHERE user_id=? AND status='RESOLVED' AND horizon_minutes>=15 ORDER BY resolved_at DESC LIMIT 2000`,[userId]);
-  const legacyResolvedSignals=Number((await db.get(`SELECT COUNT(*) c FROM shadow_signals WHERE user_id=? AND status='RESOLVED' AND horizon_minutes<15`,[userId]))?.c||0);
+  const rows=await db.all(`SELECT * FROM shadow_signals WHERE user_id=? AND status='RESOLVED' AND horizon_minutes>=1 ORDER BY resolved_at DESC LIMIT 2000`,[userId]);
+  const legacyResolvedSignals=Number((await db.get(`SELECT COUNT(*) c FROM shadow_signals WHERE user_id=? AND status='RESOLVED' AND horizon_minutes<1`,[userId]))?.c||0);
   const costs=rows.reduce((s:any,r:any)=>({news:s.news+Number(r.news_cost_usd||0),ai:s.ai+Number(r.ai_cost_usd||0)}),{news:0,ai:0});
   const diff=rows.filter((r:any)=>r.decision_with_news!==r.decision_without_news);
   const savedLoss=diff.filter((r:any)=>r.decision_with_news==='NO_TRADE'&&Number(r.return_pct)<0).reduce((s:number,r:any)=>s+Math.abs(Number(r.return_pct)),0);
@@ -649,7 +649,7 @@ export async function getResearchAnalytics(userId:number){
     mandatoryTestChecklist:[
       'CryptoPanic / News Engine A-B retest: haber açık vs haber etkisi nötr karşılaştırılacak.',
       'API + AI maliyeti, engellenen zarar ve kaçırılan kâr birlikte değerlendirilecek.',
-      'En az 50 geçerli (>=15 dk horizon) çözülmüş shadow sinyali olmadan haber sağlayıcısı hakkında kalıcı karar verilmeyecek.',
+      'En az 50 geçerli (>=1 dk test ufku) çözülmüş gölge sinyali olmadan haber sağlayıcısı hakkında kalıcı karar verilmeyecek.',
       'Backtest tek başına yeterli kabul edilmeyecek; dry-run/shadow ve Monte Carlo birlikte incelenecek.',
       'Walk-forward / out-of-sample sonucu en az birkaç sembol-zaman diliminde pozitif ve tutarlı olmadan eşikler canlı sermaye için onaylanmayacak.',
       'Paper ve Testnet sonuçları ayrı izlenecek; Testnet gerçekleşmiş performans Paper ile çelişiyorsa neden bulunmadan ilerlenmeyecek.'

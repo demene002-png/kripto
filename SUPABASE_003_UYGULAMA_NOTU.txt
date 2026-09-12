@@ -1,0 +1,9 @@
+SUPABASE 003 - 1 DAKIKALIK GOLGE TESTI
+
+1) Supabase -> SQL Editor -> New query.
+2) supabase/migrations/003_shadow_horizon_1min.sql dosyasinin tamamini yapistir.
+3) Run'a bas.
+4) Sonuc "Success. No rows returned" olmali.
+5) Ardindan bu proje surumunu GitHub main branch'e yukle; Vercel otomatik deploy eder.
+
+NOT: Bu migration sadece shadow ufkunu 1 dakikaya indirir. 7/24 bulut tarayicisi/resolver henuz deploy edilmediyse yeni shadow kaydi kendi kendine olusmaz.
