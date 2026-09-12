@@ -515,3 +515,13 @@ Kritik proje kararı:
 - Runner failures are written to `system_health_log` when possible and returned with a Turkish error message.
 - Existing Supabase Cron and database migrations do not need to be rerun for this fix.
 - PAPER100 remains simulation-only; no real Binance order endpoints are introduced.
+
+
+## Cloud Runner v1.3.4 timeout policy (2026-09-12)
+- Intermittent 200/500 Gateway Timeout observed on Vercel cloud runner.
+- Keep cron at once per minute, but process only 5 symbols per run and rotate through the Top 50.
+- Fetch strategy klines concurrently for the current batch; one symbol failure must not abort the run.
+- Binance request timeout is 4 seconds with market-data/public host fallback.
+- Critical Supabase operations retry up to 3 times on transient gateway/network failures.
+- Shadow open-symbol lookup is batched per user and new shadow rows are inserted in bulk.
+- PAPER100 remains cloud-only and must not send real Binance orders.

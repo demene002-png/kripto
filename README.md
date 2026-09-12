@@ -27,3 +27,12 @@ Bu paket yalnız sanal test içindir. Gerçek para emirleri kapalıdır.
 
 ### v1.3.3 — Vercel public market-data compatibility
 The cloud PAPER100 runner now validates Binance responses and automatically falls back to Binance market-data/public API hosts when a Vercel region cannot use the primary host. Existing Cron SQL does not need to be rerun.
+
+
+## v1.3.4 Runner Dayaniklilik Duzeltmesi
+- Her turda 10 yerine 5 coin taranir; Top 50 rotasyonu 10 dakikada tamamlanir.
+- 15m/1h/4h mum istekleri paralel calisir.
+- Binance istek timeout'u 4 saniyedir ve yedek hostlar kullanilir.
+- Supabase gecici gateway/network hatalarinda kritik sorgular 3 kez yeniden denenir.
+- Acik golge sinyalleri tek sorguda okunur, yeni golge kayitlari toplu yazilir.
+- Amac Vercel fonksiyonunun 60 saniye sinirina yaklasmadan tamamlanmasidir.

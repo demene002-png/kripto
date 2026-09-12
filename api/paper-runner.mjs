@@ -10,11 +10,26 @@ const BINANCE_BASES = [
   'https://data-api.binance.vision',
   'https://api.binance.com',
   'https://api1.binance.com',
-  'https://api2.binance.com',
-  'https://api3.binance.com',
 ];
 
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function retry(label, fn, attempts = 3) {
+  let last;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const value = await fn();
+      if (value?.error) throw value.error;
+      return value;
+    } catch (error) {
+      last = error;
+      if (i < attempts - 1) await sleep(250 * (i + 1));
+    }
+  }
+  throw new Error(`${label}: ${last?.message || String(last)}`);
+}
+
 
 const ema = (values, period) => {
   let value = values[0];
@@ -40,8 +55,8 @@ async function fetchBinanceJson(path, validator, label) {
   for (const base of BINANCE_BASES) {
     try {
       const response = await fetch(`${base}${path}`, {
-        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.3.3' },
-        signal: AbortSignal.timeout(12_000),
+        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.3.4' },
+        signal: AbortSignal.timeout(4_000),
       });
 
       const text = await response.text();
@@ -156,8 +171,7 @@ export default async function handler(req, res) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data: claim, error: claimError } = await sb.rpc('claim_paper_runner');
-  if (claimError) return res.status(500).json({ error: claimError.message });
+  const { data: claim } = await retry('Runner kilidi alinamadi', () => sb.rpc('claim_paper_runner'));
   if (!claim?.claimed) return res.status(200).json({ ok: true, skipped: true, reason: 'RUNNER_BUSY' });
 
   try {
@@ -189,22 +203,19 @@ export default async function handler(req, res) {
     const regime = btcChange < -5 ? 'PANIK' : averageChange < -2 ? 'AYI' : averageChange > 2 ? 'BOGA' : 'YATAY';
     const marketRisk = regime === 'PANIK' ? 95 : regime === 'AYI' ? 70 : regime === 'BOGA' ? 25 : 45;
 
-    const { data: settings, error: settingsError } = await sb
+    const { data: settings } = await retry('Ayarlar okunamadi', () => sb
       .from('trading_settings')
       .select('*')
       .eq('cloud_runner_enabled', true)
-      .eq('execution_mode', 'PAPER');
-
-    if (settingsError) throw settingsError;
+      .eq('execution_mode', 'PAPER')); 
 
     const cursor = Number(claim.cursor || 0) % all.length;
-    let batch = all.slice(cursor, cursor + 10);
-    if (batch.length < 10) batch = [...batch, ...all.slice(0, 10 - batch.length)];
-    const nextCursor = (cursor + 10) % all.length;
+    let batch = all.slice(cursor, cursor + 5);
+    if (batch.length < 5) batch = [...batch, ...all.slice(0, 5 - batch.length)];
+    const nextCursor = (cursor + 5) % all.length;
 
     // Acik PAPER100 pozisyonlarinin stop / TP / trailing yonetimi.
-    const { data: positions, error: positionsError } = await sb.from('paper_positions').select('*');
-    if (positionsError) throw positionsError;
+    const { data: positions } = await retry('Acik pozisyonlar okunamadi', () => sb.from('paper_positions').select('*')); 
 
     for (const position of positions || []) {
       const price = priceMap.get(position.symbol);
@@ -259,13 +270,11 @@ export default async function handler(req, res) {
     }
 
     // 1 dakikasi dolan golge sinyallerini coz.
-    const { data: openShadow, error: shadowError } = await sb
+    const { data: openShadow } = await retry('Golge sinyalleri okunamadi', () => sb
       .from('shadow_signals')
       .select('*')
       .eq('status', 'OPEN')
-      .lte('resolve_at', new Date().toISOString());
-
-    if (shadowError) throw shadowError;
+      .lte('resolve_at', new Date().toISOString()));
 
     for (const shadow of openShadow || []) {
       const price = priceMap.get(shadow.symbol);
@@ -310,25 +319,56 @@ export default async function handler(req, res) {
         market_volatility: Math.abs(averageChange),
       };
 
-      const { data: runRow, error: runError } = await sb
+      const { data: runRow } = await retry('Tarama kaydi acilamadi', () => sb
         .from('autopilot_scan_runs')
         .insert(run)
         .select()
-        .single();
-
-      if (runError) throw runError;
+        .single());
 
       let best = null;
       const resultRows = [];
+      const newShadowRows = [];
 
-      for (const ticker of batch) {
+      const { data: openForUser } = await retry('Acik golge listesi okunamadi', () => sb
+        .from('shadow_signals')
+        .select('symbol')
+        .eq('user_id', st.user_id)
+        .eq('status', 'OPEN'));
+      const openShadowSymbols = new Set((openForUser || []).map((x) => x.symbol));
+
+      // Bes coinlik partinin tum mum isteklerini paralel yap. Boylece Vercel fonksiyonu
+      // uzun sure acik kalmaz; tek bir coin hatasi digerlerini durdurmaz.
+      const marketJobs = await Promise.allSettled(batch.map(async (ticker) => {
+        const [scalpKlines, dayKlines, swingKlines] = await Promise.all([
+          getKlines(ticker.symbol, '15m'),
+          getKlines(ticker.symbol, '1h'),
+          getKlines(ticker.symbol, '4h'),
+        ]);
+        return { ticker, scalpKlines, dayKlines, swingKlines };
+      }));
+
+      for (let jobIndex = 0; jobIndex < marketJobs.length; jobIndex += 1) {
+        const job = marketJobs[jobIndex];
+        const ticker = batch[jobIndex];
+        if (job.status === 'rejected') {
+          resultRows.push({
+            run_id: runRow.id,
+            user_id: st.user_id,
+            symbol: ticker.symbol,
+            primary_strategy: 'VERI_HATASI',
+            consensus_count: 0,
+            market_regime: regime,
+            news_level: 'NORMAL',
+            veto_active: false,
+            risk_manager_allowed: false,
+            blocks: [`Piyasa verisi alinamadi: ${job.reason?.message || String(job.reason)}`],
+            final_action: 'NO_TRADE',
+          });
+          continue;
+        }
+
         try {
-          const [scalpKlines, dayKlines, swingKlines] = await Promise.all([
-            getKlines(ticker.symbol, '15m'),
-            getKlines(ticker.symbol, '1h'),
-            getKlines(ticker.symbol, '4h'),
-          ]);
-
+          const { scalpKlines, dayKlines, swingKlines } = job.value;
           const scores = [score(scalpKlines), score(dayKlines), score(swingKlines)];
           const names = ['SCALP', 'GUNLUK', 'SWING'];
           const bestIndex = scores.map((x) => x.opp).indexOf(Math.max(...scores.map((x) => x.opp)));
@@ -363,16 +403,9 @@ export default async function handler(req, res) {
             final_action: finalAction,
           });
 
-          const { data: existing } = await sb
-            .from('shadow_signals')
-            .select('id')
-            .eq('user_id', st.user_id)
-            .eq('symbol', ticker.symbol)
-            .eq('status', 'OPEN')
-            .maybeSingle();
-
-          if (!existing) {
-            await sb.from('shadow_signals').insert({
+          if (!openShadowSymbols.has(ticker.symbol)) {
+            openShadowSymbols.add(ticker.symbol);
+            newShadowRows.push({
               user_id: st.user_id,
               symbol: ticker.symbol,
               entry_price: Number(ticker.lastPrice),
@@ -406,24 +439,27 @@ export default async function handler(req, res) {
             };
           }
         } catch (error) {
-          // Bir coin hata verirse tum tarama durmasin; diagnostics'te gorunsun.
           resultRows.push({
             run_id: runRow.id,
             user_id: st.user_id,
             symbol: ticker.symbol,
-            primary_strategy: 'VERI_HATASI',
+            primary_strategy: 'HESAP_HATASI',
             consensus_count: 0,
             market_regime: regime,
             news_level: 'NORMAL',
             veto_active: false,
             risk_manager_allowed: false,
-            blocks: [`Piyasa verisi alinamadi: ${error?.message || String(error)}`],
+            blocks: [`Analiz hatasi: ${error?.message || String(error)}`],
             final_action: 'NO_TRADE',
           });
         }
       }
 
-      if (resultRows.length) await sb.from('autopilot_scan_results').insert(resultRows);
+      if (newShadowRows.length) {
+        await retry('Yeni golge sinyalleri yazilamadi', () => sb.from('shadow_signals').insert(newShadowRows));
+      }
+
+      if (resultRows.length) await retry('Tarama sonuclari yazilamadi', () => sb.from('autopilot_scan_results').insert(resultRows));
 
       let executed = 0;
       if (st.automation_mode === 'FULL_AUTO' && !st.safe_mode && best) {
@@ -504,7 +540,7 @@ export default async function handler(req, res) {
       }).eq('user_id', st.user_id);
     }
 
-    await sb.rpc('advance_paper_runner', { p_cursor: nextCursor });
+    await retry('Runner imleci ilerletilemedi', () => sb.rpc('advance_paper_runner', { p_cursor: nextCursor }));
 
     return res.status(200).json({
       ok: true,
