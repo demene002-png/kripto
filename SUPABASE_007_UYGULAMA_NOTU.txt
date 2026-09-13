@@ -1,0 +1,3 @@
+Supabase SQL Editor'da supabase/migrations/007_quality_gates.sql dosyasini bir kez calistirin.
+Bu migration mevcut PAPER100 esiklerini daha secici hale getirir ve runner sorgulari icin indeks ekler.
+Sonra projeyi GitHub main branch'e yukleyin; Vercel otomatik deploy edecektir.

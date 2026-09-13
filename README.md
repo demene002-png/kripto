@@ -53,3 +53,17 @@ The cloud PAPER100 runner now validates Binance responses and automatically fall
 
 ### v1.3.7 stablecoin filtresi
 USDT nakit/quote olarak tutulur, BNB işlem evreninde kalır. U dahil diğer stablecoin ve fiat-benzeri taban varlıklar yeni otomatik PAPER alışlarına kapatılmıştır.
+
+
+## v1.3.9 - Secici Giris ve Zarar Koruma
+- Otomatik PAPER alimi icin asgari firsat puani 80'dir.
+- 75-79 puan arasi yalniz Golge Testi icin izlenir; otomatik alis acilmaz.
+- En az iki zaman diliminde 75+ mutabakat ve trend hizasi gerekir.
+- RSI, hacim, EMA9 uzakligi ve kisa vadeli tepeye yakinlik giris teyidi olarak kullanilir.
+- AYI ve PANIK piyasa rejimlerinde yeni long spot alisi acilmaz; test verisi toplanmaya devam eder.
+- Stop ATR/volatiliteye gore ayarlanir; TP1 1.8R, TP2 3.0R ve komisyon duyarlı R/R kapisi vardir.
+- 80-84 puanli islem yarim boy, 85-89 %75 boy, 90+ tam boy risk sermayesi kullanir.
+- Stop sonrasi ayni coine 60 dk, diger kapanislar sonrasi 30 dk yeniden giris bekleme suresi vardir.
+- Gunluk zarar limiti ve son 3 zararli kapanis icin 60 dakikalik devre kesici yeni alislari durdurur.
+- Toplam acik risk limiti yeni pozisyon riskine dahil edilir.
+- Bu surum halen PAPER100 sanal testtir; gercek Binance emri gondermez.

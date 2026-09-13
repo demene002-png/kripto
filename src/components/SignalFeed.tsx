@@ -41,7 +41,7 @@ export default function SignalFeed() {
             <div>
               <h4 className="text-sm font-medium text-blue-400">Otomatik Pilot Devrede</h4>
               <p className="text-xs text-blue-400/80 mt-1 leading-relaxed">
-                Günlük hedef bölgesi %{state.dailyTargetPercent}. Sistem bu hedef uğruna işlem zorlamaz ve hiçbir gerçek emir göndermez.
+                Günlük hedef bölgesi %{state.dailyTargetPercent}. Sistem 80 altı fırsatlarda otomatik alım yapmaz; 75-79 arası yalnız Gölge Testi'nde izlenir. Ayı/Panik rejiminde yeni spot alışı açılmaz.
               </p>
             </div>
           </div>

@@ -31,6 +31,15 @@ function eligibleSpotSymbol(symbol) {
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// v1.3.9 kalite kapilari: otomatik PAPER islemleri daha secici.
+const AUTO_MIN_OPPORTUNITY = 80;
+const SHADOW_MIN_OPPORTUNITY = 75;
+const AUTO_MIN_CONFIDENCE = 70;
+const AUTO_MAX_RISK = 55;
+const AUTO_MIN_CONSENSUS = 2;
+const STOP_COOLDOWN_MINUTES = 60;
+const MANUAL_COOLDOWN_MINUTES = 30;
+
 async function retry(label, fn, attempts = 3) {
   let last;
   for (let i = 0; i < attempts; i += 1) {
@@ -71,7 +80,7 @@ async function fetchBinanceJson(path, validator, label) {
   for (const base of BINANCE_BASES) {
     try {
       const response = await fetch(`${base}${path}`, {
-        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.3.5' },
+        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.3.9' },
         signal: AbortSignal.timeout(4_000),
       });
 
@@ -111,12 +120,14 @@ async function get24hTickers() {
 
 async function getKlines(symbol, interval) {
   const { data } = await fetchBinanceJson(
-    `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=60`,
+    `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=61`,
     (value) => Array.isArray(value) && value.length >= 50 && Array.isArray(value[0]),
     `${symbol} ${interval} mum verisi`,
   );
 
-  return data.map((x) => ({
+  // Binance son mumu halen acik/incomplete dondurebilir. Sinyal ve hacim teyidi
+  // yalniz kapanmis mumlardan hesaplanir.
+  return data.slice(0, -1).map((x) => ({
     c: Number(x[4]),
     h: Number(x[2]),
     l: Number(x[3]),
@@ -132,7 +143,14 @@ function score(klines) {
   const e50 = ema(closes, 50);
   const R = rsi(closes);
   const momentum = (last / closes.at(-6) - 1) * 100;
-  const atr = klines.slice(-14).reduce((sum, x) => sum + (x.h - x.l), 0) / 14 / last * 100;
+  const atrWindow = klines.slice(-15);
+  let trSum = 0;
+  for (let i = 1; i < atrWindow.length; i += 1) {
+    const x = atrWindow[i];
+    const prevClose = atrWindow[i - 1].c;
+    trSum += Math.max(x.h - x.l, Math.abs(x.h - prevClose), Math.abs(x.l - prevClose));
+  }
+  const atr = (trSum / Math.max(1, atrWindow.length - 1)) / last * 100;
   const averageVolume = klines.slice(-21, -1).reduce((sum, x) => sum + x.v, 0) / 20 || 1;
   const volumeRatio = klines.at(-1).v / averageVolume;
 
@@ -153,11 +171,28 @@ function score(klines) {
     + (volumeRatio > 1.1 ? 8 : 0)
     - Math.min(12, atr * 2);
 
+  const recentHigh = Math.max(...klines.slice(-10).map((x) => x.h));
+  const pullbackPct = recentHigh > 0 ? (recentHigh - last) / recentHigh * 100 : 0;
+  const distanceFromEma9Pct = e9 > 0 ? (last / e9 - 1) * 100 : 0;
+  const trendAligned = e9 > e21 && e21 > e50;
+  const entryTimingOk = trendAligned
+    && R >= 50 && R <= 68
+    && volumeRatio >= 0.90
+    && distanceFromEma9Pct >= -1.25
+    && distanceFromEma9Pct <= 1.80
+    && pullbackPct <= 3.0;
+
   return {
     opp: Math.round(clamp(opportunity, 0, 100)),
     risk: Math.round(clamp(risk, 0, 100)),
     conf: Math.round(clamp(confidence, 0, 100)),
     atr,
+    rsi: R,
+    volumeRatio,
+    pullbackPct,
+    distanceFromEma9Pct,
+    trendAligned,
+    entryTimingOk,
   };
 }
 
@@ -242,7 +277,7 @@ export default async function handler(req, res) {
         stop = Math.max(
           stop,
           highest * (1 - Number(position.trailing_distance_percent || 1) / 100),
-          Number(position.average_entry) * 1.001,
+          Number(position.average_entry) * 1.0022,
         );
       }
 
@@ -269,7 +304,7 @@ export default async function handler(req, res) {
         });
         await sb.from('paper_positions').update({
           tp1_hit: true,
-          stop_loss: Number(position.average_entry) * 1.001,
+          stop_loss: Number(position.average_entry) * 1.0022,
         }).eq('id', position.id);
       } else if (!position.tp2_hit && position.take_profit_2 && price >= Number(position.take_profit_2)) {
         await sb.rpc('paper_sell_fraction_for_user', {
@@ -388,14 +423,24 @@ export default async function handler(req, res) {
           const bestIndex = scores.map((x) => x.opp).indexOf(Math.max(...scores.map((x) => x.opp)));
           const q = scores[bestIndex];
 
-          const allowed = q.opp >= Number(st.paper_candidate_opportunity)
-            && q.risk <= Number(st.paper_max_risk)
-            && q.conf >= Number(st.paper_min_confidence)
-            && regime !== 'PANIK'
-            && !st.safe_mode;
+          const consensusCount = scores.filter((x) => x.opp >= SHADOW_MIN_OPPORTUNITY).length;
+          const trendConsensusCount = scores.filter((x) => x.trendAligned).length;
+          const configuredOpportunity = Math.max(AUTO_MIN_OPPORTUNITY, Number(st.paper_candidate_opportunity || 0));
+          const configuredRisk = Math.min(AUTO_MAX_RISK, Number(st.paper_max_risk || AUTO_MAX_RISK));
+          const configuredConfidence = Math.max(AUTO_MIN_CONFIDENCE, Number(st.paper_min_confidence || 0));
 
+          const qualityGate = q.opp >= configuredOpportunity
+            && q.risk <= configuredRisk
+            && q.conf >= configuredConfidence
+            && consensusCount >= AUTO_MIN_CONSENSUS
+            && trendConsensusCount >= AUTO_MIN_CONSENSUS
+            && q.entryTimingOk;
+          const regimeGate = regime === 'BOGA' || regime === 'YATAY';
+          const allowed = qualityGate && regimeGate && !st.safe_mode;
+
+          // 75-79 puan arasi sadece golge testinde izlenir. 80+ bile olsa giris
+          // teyidi, zaman dilimi mutabakati ve rejim kapisini gecmeden alis yapilmaz.
           const finalAction = allowed ? 'BUY_CANDIDATE' : 'NO_TRADE';
-          const consensusCount = scores.filter((x) => x.opp >= 65).length;
 
           resultRows.push({
             run_id: runRow.id,
@@ -404,16 +449,25 @@ export default async function handler(req, res) {
             opportunity: q.opp,
             risk: q.risk,
             confidence: q.conf,
-            required_opportunity: st.paper_candidate_opportunity,
-            max_allowed_risk: st.paper_max_risk,
-            required_confidence: st.paper_min_confidence,
+            required_opportunity: configuredOpportunity,
+            max_allowed_risk: configuredRisk,
+            required_confidence: configuredConfidence,
             primary_strategy: names[bestIndex],
             consensus_count: consensusCount,
             market_regime: regime,
             news_level: 'NORMAL',
-            veto_active: regime === 'PANIK',
+            veto_active: regime === 'PANIK' || regime === 'AYI',
             risk_manager_allowed: allowed,
-            blocks: allowed ? [] : [regime === 'PANIK' ? 'PANIK piyasa rejimi' : 'Esikler karsilanmadi'],
+            blocks: allowed ? [] : [
+              ...(q.opp >= SHADOW_MIN_OPPORTUNITY && q.opp < configuredOpportunity ? [`${q.opp} puan: yalniz Golge Testi, otomatik alis yok`] : q.opp < SHADOW_MIN_OPPORTUNITY ? [`Firsat puani ${q.opp}/${SHADOW_MIN_OPPORTUNITY} golge kalite tabaninin altinda`] : []),
+              ...(q.risk > configuredRisk ? [`Risk puani ${q.risk}/${configuredRisk} ustunde`] : []),
+              ...(q.conf < configuredConfidence ? [`Guven puani ${q.conf}/${configuredConfidence} altinda`] : []),
+              ...(consensusCount < AUTO_MIN_CONSENSUS ? ['En az 2 zaman diliminde 75+ mutabakat yok'] : []),
+              ...(trendConsensusCount < AUTO_MIN_CONSENSUS ? ['En az 2 zaman diliminde trend hizasi yok'] : []),
+              ...(!q.entryTimingOk ? [`Giris teyidi yok (RSI ${q.rsi.toFixed(1)}, hacim x${q.volumeRatio.toFixed(2)}, EMA9 uzaklik %${q.distanceFromEma9Pct.toFixed(2)})`] : []),
+              ...(!regimeGate ? [`${regime} piyasa rejiminde yeni spot alis kapali`] : []),
+              ...(st.safe_mode ? ['Guvenli Mod acik'] : []),
+            ],
             final_action: finalAction,
           });
 
@@ -436,7 +490,7 @@ export default async function handler(req, res) {
               consensus_count: consensusCount,
               veto_active: regime === 'PANIK',
               news_level: 'NORMAL',
-              news_reason: 'Ucretli haber saglayicisi yapilandirilmadi',
+              news_reason: `Haber saglayicisi yok | RSI ${q.rsi.toFixed(1)} | hacim x${q.volumeRatio.toFixed(2)} | EMA9 uzaklik %${q.distanceFromEma9Pct.toFixed(2)}`, 
               horizon_minutes: 1,
               resolve_at: new Date(Date.now() + 60_000).toISOString(),
               status: 'OPEN',
@@ -477,28 +531,59 @@ export default async function handler(req, res) {
 
       let executed = 0;
       if (st.automation_mode === 'FULL_AUTO' && !st.safe_mode && best) {
-        const [{ data: account }, { data: userPositions }] = await Promise.all([
+        const dayStart = new Date();
+        dayStart.setHours(0, 0, 0, 0);
+        const cooldownStart = new Date(Date.now() - STOP_COOLDOWN_MINUTES * 60_000).toISOString();
+        const [{ data: account }, { data: userPositions }, { data: todaySells }, { data: recentSells }] = await Promise.all([
           sb.from('paper_accounts').select('*').eq('user_id', st.user_id).single(),
           sb.from('paper_positions').select('*').eq('user_id', st.user_id),
+          sb.from('trade_history').select('realized_pnl,created_at').eq('user_id', st.user_id).eq('side', 'SELL').gte('created_at', dayStart.toISOString()),
+          sb.from('trade_history').select('symbol,reason,realized_pnl,created_at').eq('user_id', st.user_id).eq('side', 'SELL').gte('created_at', cooldownStart).order('created_at', { ascending: false }).limit(20),
         ]);
 
         const currentPositions = userPositions || [];
         const hasSymbol = currentPositions.some((p) => p.symbol === best.symbol);
+        const realizedToday = (todaySells || []).reduce((sum, t) => sum + Number(t.realized_pnl || 0), 0);
+        const dailyLossLimit = Number(account.starting_balance || 100) * (Number(st.max_daily_loss_percent || 2) / 100);
+        const dailyLossBlocked = realizedToday <= -dailyLossLimit;
 
-        if (currentPositions.length < Number(st.max_positions) && !hasSymbol) {
+        const symbolRecentSell = (recentSells || []).find((t) => t.symbol === best.symbol);
+        let cooldownBlocked = false;
+        if (symbolRecentSell) {
+          const ageMin = (Date.now() - new Date(symbolRecentSell.created_at).getTime()) / 60_000;
+          const required = ['ZARAR_DURDUR', 'IZ_SUREN_STOP'].includes(symbolRecentSell.reason) ? STOP_COOLDOWN_MINUTES : MANUAL_COOLDOWN_MINUTES;
+          cooldownBlocked = ageMin < required;
+        }
+
+        const lastThree = (recentSells || []).slice(0, 3);
+        const lossStreakBlocked = lastThree.length === 3 && lastThree.every((t) => Number(t.realized_pnl || 0) < 0)
+          && (Date.now() - new Date(lastThree[0].created_at).getTime()) < 60 * 60_000;
+
+        if (currentPositions.length < Number(st.max_positions) && !hasSymbol && !dailyLossBlocked && !cooldownBlocked && !lossStreakBlocked) {
           const equity = Number(account.balance) + currentPositions.reduce(
             (sum, p) => sum + (priceMap.get(p.symbol) || Number(p.average_entry)) * Number(p.quantity),
             0,
           );
-          const stopPct = clamp(best.q.atr * 1.4 / 100, 0.012, 0.05);
-          const riskBudget = equity * (Number(st.risk_per_trade_percent) / 100);
+          // ATR tabanli, komisyonu ezmeyecek kadar genis stop.
+          const stopPct = clamp(best.q.atr * 1.6 / 100, 0.015, 0.045);
+          const rawRiskBudget = equity * (Number(st.risk_per_trade_percent) / 100);
+          const currentOpenRisk = currentPositions.reduce((sum, p) => sum + Number(p.risk_amount || 0), 0);
+          const maxOpenRiskUsd = equity * (Number(st.max_open_risk_percent || 1.75) / 100);
+          const remainingOpenRisk = Math.max(0, maxOpenRiskUsd - currentOpenRisk);
+          const riskBudget = Math.min(rawRiskBudget, remainingOpenRisk);
+          const qualitySizeMultiplier = best.q.opp >= 90 ? 1 : best.q.opp >= 85 ? 0.75 : 0.50;
           const spend = Math.min(
-            riskBudget / stopPct,
-            equity * (Number(st.position_size_percent) / 100),
+            (riskBudget / stopPct) * qualitySizeMultiplier,
+            equity * (Number(st.position_size_percent) / 100) * qualitySizeMultiplier,
             Number(account.balance),
           );
 
-          if (spend >= 2) {
+          // TP1 komisyon sonrasi en az ~1.4R hedefler; stop da ATR ile uyumludur.
+          const estimatedNetRisk = stopPct + 0.002;
+          const estimatedNetReward1 = stopPct * 1.8 - 0.002;
+          const feeAwareRR = estimatedNetReward1 / Math.max(0.0001, estimatedNetRisk);
+
+          if (spend >= 2 && riskBudget > 0 && feeAwareRR >= 1.30) {
             const price = best.price;
             const stop = price * (1 - stopPct);
             const { error: buyError } = await sb.rpc('paper_buy_for_user', {
@@ -507,10 +592,10 @@ export default async function handler(req, res) {
               p_price: price,
               p_spend: spend,
               p_stop: stop,
-              p_tp1: price * (1 + stopPct * 1.5),
-              p_tp2: price * (1 + stopPct * 2.5),
-              p_trail_activation: price * (1 + stopPct * 1.8),
-              p_trail_pct: Math.max(0.6, stopPct * 100 * 0.55),
+              p_tp1: price * (1 + stopPct * 1.8),
+              p_tp2: price * (1 + stopPct * 3.0),
+              p_trail_activation: price * (1 + stopPct * 2.1),
+              p_trail_pct: Math.max(0.7, stopPct * 100 * 0.60),
               p_strategy: best.strategy,
               p_regime: regime,
               p_opp: best.q.opp,
@@ -532,7 +617,7 @@ export default async function handler(req, res) {
                 market_regime: regime,
                 status: 'EXECUTED',
                 source: 'cloud-auto-runner',
-                analysis: 'Otomatik sanal islem acildi.',
+                analysis: `Otomatik sanal islem acildi. Kalite ${best.q.opp}/100, boyut x${qualitySizeMultiplier.toFixed(2)}, tahmini net R/R ${feeAwareRR.toFixed(2)}.`,
               });
             }
           }

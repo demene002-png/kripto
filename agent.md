@@ -559,3 +559,20 @@ Kritik proje kararı:
 - Açık pozisyon K/Z'si tahmini satış komisyonunu da içerir.
 - Kapanış nedenleri (ZARAR_DURDUR, IZ_SUREN_STOP, KAR_AL_1, KAR_AL_2, MANUAL_CLOSE) Türkçe arayüzde açıkça gösterilir.
 - Mevcut eski SELL satırları migration 006 ile %0,10 eski giriş komisyonu varsayımı üzerinden net K/Z'ye düzeltilir.
+
+
+## v1.3.9 - Secici Giris Motoru ve Zarar Devre Kesicileri (2026-09-13)
+- Otomatik PAPER100 alimi icin kod seviyesinde sert taban firsat puani 80'dir; DB ayari daha dusuk olsa bile 80 altina inmez.
+- 75-79 firsat puani yalniz Golge Testi/veri toplama icindir; gercek PAPER pozisyon acmaz.
+- Otomatik alis icin en az 2/3 zaman diliminde 75+ firsat mutabakati ve en az 2/3 trend hizasi gerekir.
+- Giris teyidi: secilen zaman diliminde EMA9>EMA21>EMA50, RSI 50-68, son mum hacmi 20 mum ortalamasinin en az 0.90 kati, fiyat EMA9'dan %-1.25 ile %+1.80 araliginda ve son 10 mum tepesinden en fazla %3 uzakta olmalidir.
+- Long-only PAPER spot sistemi AYI ve PANIK rejiminde yeni alis acmaz; Golge Testi toplamaya devam eder.
+- Stop ATR'nin 1.6 katiyla hesaplanir ve %1.5-%4.5 araliginda sinirlanir. TP1=1.8R, TP2=3.0R, trailing aktivasyon=2.1R; TP1 sonrasi stop komisyonu da kapsayan yaklasik %0.22 ustu maliyet seviyesine tasinir.
+- Komisyon duyarlı tahmini TP1 net R/R 1.30 altindaysa islem acilmaz.
+- Firsat puanina gore pozisyon boyutu: 80-84 => x0.50, 85-89 => x0.75, 90+ => x1.00.
+- Gunluk gerceklesmis zarar `max_daily_loss_percent` limitine ulasirsa yeni alislar durur.
+- Son 3 kapanis zararliysa ve en son zarar son 60 dakika icindeyse yeni alislar gecici olarak durur.
+- Stop/iz suren stop sonrasi ayni sembole 60 dk; diger kapanislar sonrasi 30 dk yeniden giris bekleme suresi uygulanir.
+- `max_open_risk_percent` artik yeni pozisyon risk butcesine dogrudan uygulanir.
+- Supabase migration 007 mevcut esikleri en az 80 firsat / 70 guven / en fazla 55 risk seviyesine getirir ve runner sorgu indekslerini ekler.
+- Bu degisiklikler test performansini garanti etmez; amac gereksiz ve dusuk kaliteli girisleri azaltmak ve daha guvenilir retest verisi toplamaktir.
