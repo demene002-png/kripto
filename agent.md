@@ -576,3 +576,15 @@ Kritik proje kararı:
 - `max_open_risk_percent` artik yeni pozisyon risk butcesine dogrudan uygulanir.
 - Supabase migration 007 mevcut esikleri en az 80 firsat / 70 guven / en fazla 55 risk seviyesine getirir ve runner sorgu indekslerini ekler.
 - Bu degisiklikler test performansini garanti etmez; amac gereksiz ve dusuk kaliteli girisleri azaltmak ve daha guvenilir retest verisi toplamaktir.
+
+
+## v1.4.0 KRİTİK PROFESYONEL KURALLAR
+- Kullanıcıya görünen arayüz Türkçe olmalı; coin sembolleri ve standart finans kısaltmaları istisnadır.
+- Ücretli API zorunluluğu oluşturulmayacak. Binance public veri + Supabase/Vercel mevcut ücretsiz katmanları önceliklidir.
+- Otomatik PAPER alış için en az 80 fırsat, en az 4/6 strateji oyu, zaman dilimi mutabakatı, giriş teyidi ve izin verilen piyasa rejimi gerekir.
+- Korelasyon >=0.92 ise yeni benzer pozisyon açma; 0.82-0.92 ise pozisyon boyutunu %60'a düşür.
+- Hesap başlangıca göre %5 drawdown'a gelirse yeni alışları durdur.
+- Aynı coin son 24 saatte en az 3 kapanışta toplam zarar yazdıysa geçici kilitle.
+- Backtest/optimizasyon sonucu doğrudan otomatik ayara uygulanmaz; walk-forward ve PAPER doğrulaması gerekir.
+- Backtestte komisyon %0.10/alım + %0.10/satım ve varsayılan 5 bp kayma dikkate alınır.
+- CryptoPanic opsiyoneldir; maliyet/katkı kararı retest verisine göre verilir.

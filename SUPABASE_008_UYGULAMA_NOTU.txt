@@ -1,0 +1,8 @@
+SUPABASE 008 — PROFESYONEL LABORATUVAR
+
+1) Supabase > SQL Editor
+2) supabase/migrations/008_profesyonel_laboratuvar.sql içeriğini çalıştırın.
+3) Başarılı olduktan sonra GitHub main branch'e v1.4.0 dosyalarını yükleyin.
+4) Vercel deploy tamamlanınca Profesyonel Strateji Laboratuvarı kartından test başlatın.
+
+Ücretli API gerekmez.

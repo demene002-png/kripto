@@ -67,3 +67,25 @@ USDT nakit/quote olarak tutulur, BNB işlem evreninde kalır. U dahil diğer sta
 - Gunluk zarar limiti ve son 3 zararli kapanis icin 60 dakikalik devre kesici yeni alislari durdurur.
 - Toplam acik risk limiti yeni pozisyon riskine dahil edilir.
 - Bu surum halen PAPER100 sanal testtir; gercek Binance emri gondermez.
+
+
+## v1.4.0 — Profesyonel Ücretsiz Paket
+
+Bu sürüm ücretli API zorunluluğu olmadan aşağıdaki katmanları ekler:
+- Profesyonel Strateji Laboratuvarı: Binance public verisiyle backtest
+- Walk-forward: %70 eğitim / %30 görülmemiş doğrulama
+- Grid tabanlı parametre optimizasyonu
+- Strateji topluluğu: Trend, Momentum, Kırılım, Hacim, Ortalamaya Dönüş, Geri Çekilme
+- Piyasa Rejim Motoru 2.0: Güçlü Boğa, Zayıf Boğa, Yatay, Toparlanma, Dağıtım, Ayı, Panik, Yüksek Oynaklık
+- Dinamik coin kalite filtresi: minimum hacim ve aşırı günlük hareket filtresi
+- Portföy korelasyon koruması
+- Max drawdown guard (%5), günlük zarar limiti, art arda zarar devre kesici, düşük performanslı coin kilidi
+- Komisyon + slippage simülasyonu
+- Strateji katkı analizi, MAE/MFE, Sharpe, profit factor, maksimum düşüş, benchmark
+- Backtest sonuçlarının Supabase'e kaydı
+
+### Ücretsiz veri ilkesi
+Piyasa ve geçmiş mum verileri Binance public Spot uçlarından alınır. Zorunlu ücretli yapay zeka veya haber API'si yoktur. CryptoPanic gibi anahtar isteyen haber sağlayıcıları opsiyonel kalır.
+
+### Kurulum
+Mevcut migration'lara ek olarak `supabase/migrations/008_profesyonel_laboratuvar.sql` dosyasını Supabase SQL Editor'da bir kez çalıştırın. Sonra projeyi Vercel'e deploy edin.
