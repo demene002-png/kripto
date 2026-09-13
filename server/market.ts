@@ -16,7 +16,7 @@ export type MarketCoin = {
   spreadPercent: number;
 };
 
-const STABLE_BASES = new Set(['USDT','USDC','FDUSD','TUSD','DAI','USDP','USD1','USDE','USDD','PYUSD','AEUR','EURI','RLUSD','EUR','TRY','BRL','GBP','AUD','USTC']);
+const STABLE_BASES = new Set(['USDT','USDC','FDUSD','TUSD','DAI','USDP','BUSD','USD1','U','USDE','USDS','USDD','PYUSD','GUSD','FRAX','LUSD','USD0','AEUR','EURI','RLUSD','XUSD','AUSD','BFUSD','USDX','EUR','TRY','BRL','GBP','AUD','USTC']);
 const EXCLUDED_SUFFIXES = ['UP','DOWN','BULL','BEAR'];
 let cache: { expiresAt: number; data: MarketCoin[] } | null = null;
 let lastMarketSuccessAt = 0;

@@ -13,8 +13,11 @@ const BINANCE_BASES = [
 ];
 
 
+// USDT is the quote/cash asset. BNB remains a normal tradable asset.
+// All known stablecoin/fiat-pegged base assets are excluded from auto-scan and auto-buy.
 const EXCLUDED_STABLE_BASES = new Set([
-  'USDT','USDC','FDUSD','TUSD','USDP','DAI','BUSD','USD1','USDE','USDS','PYUSD','GUSD','USDD','FRAX','LUSD','USD0','USTC'
+  'USDT','USDC','FDUSD','TUSD','USDP','DAI','BUSD','USD1','U','USDE','USDS','PYUSD','GUSD','USDD','FRAX','LUSD','USD0','USTC',
+  'RLUSD','AEUR','EURI','XUSD','AUSD','BFUSD','USDX','EUR','TRY','BRL','GBP','AUD'
 ]);
 function baseAsset(symbol) { return symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol; }
 function eligibleSpotSymbol(symbol) {

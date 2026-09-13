@@ -12,7 +12,7 @@ interface AppContextType {
   fetchMarketData: () => void; forceSignalCheck: (symbol: string) => void; isRefreshingMarket: boolean; isSyncing: boolean; marketRegime: MarketRegime | null; newsIntelligence: NewsIntelligence | null;
 }
 
-const defaultState: AppState = { balance: 100, portfolio: [], favorites: [], autoPilot: false, autoPilotAmount: 25, autoPilotBudget: 100, dailyTargetPercent: 3, positionSizePercent: 25, riskProfile:'BALANCED', riskPerTradePercent:0.5, maxDailyLossPercent:2, maxOpenRiskPercent:1.75, maxPositions:3, executionMode:'PAPER', automationMode:'MANUAL', safeMode:false, liveCapitalCapUsd:0, liveApiPermissionAttested:false, emergencyDrillAttested:false, testnetReviewAttested:false, newsRetestAttested:false };
+const defaultState: AppState = { balance: 100, portfolio: [], favorites: [], autoPilot: false, autoPilotAmount: 25, autoPilotBudget: 100, dailyTargetPercent: 3, positionSizePercent: 25, riskProfile:'BALANCED', riskPerTradePercent:0.5, maxDailyLossPercent:2, maxOpenRiskPercent:1.75, maxPositions:3, executionMode:'PAPER', automationMode:'MANUAL', safeMode:false, liveCapitalCapUsd:0, liveApiPermissionAttested:false, emergencyDrillAttested:false, testnetReviewAttested:false, newsRetestAttested:false, startingBalance:100, realizedPnl:0, totalFees:0 };
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -37,6 +37,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setState(s=>({
         ...s,
         balance:Number(d.account.balance||0),
+        startingBalance:Number(d.account.starting_balance||100),
+        realizedPnl:Number(d.account.realized_pnl||0),
+        totalFees:Number(d.account.total_fees||0),
         portfolio:d.portfolio,
         ...(preserveLocalSettings?{}:mapSettingsToState(d.settings))
       }));

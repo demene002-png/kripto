@@ -49,3 +49,7 @@ The cloud PAPER100 runner now validates Binance responses and automatically fall
 - Açık pozisyon fiyatları, otomatik alım filtresinden bağımsız olarak portföy görünümüne eklenir.
 - `Sat` butonu işlem sırasında `Satılıyor…` durumu gösterir ve çift tıklamayı engeller.
 - Risk azaltıcı manuel SELL, stablecoin filtresi nedeniyle hiçbir zaman engellenmemelidir.
+
+
+### v1.3.7 stablecoin filtresi
+USDT nakit/quote olarak tutulur, BNB işlem evreninde kalır. U dahil diğer stablecoin ve fiat-benzeri taban varlıklar yeni otomatik PAPER alışlarına kapatılmıştır.

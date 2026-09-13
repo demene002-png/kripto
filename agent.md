@@ -541,3 +541,21 @@ Kritik proje kararı:
 - Açık pozisyon fiyatları, otomatik alım filtresinden bağımsız olarak portföy görünümüne eklenir.
 - `Sat` butonu işlem sırasında `Satılıyor…` durumu gösterir ve çift tıklamayı engeller.
 - Risk azaltıcı manuel SELL, stablecoin filtresi nedeniyle hiçbir zaman engellenmemelidir.
+
+
+## v1.3.7 — Stablecoin evreni sert filtresi
+- USDT yalnız nakit/quote varlığıdır; otomatik alış için taban varlık olarak kullanılmaz.
+- BNB stablecoin değildir ve normal işlem evreninde kalır.
+- U (UUSDT), USD1, USDC, FDUSD, TUSD, USDP, DAI, BUSD, USDE, USDS, PYUSD, GUSD, USDD, FRAX, LUSD, USD0, USTC, RLUSD, AEUR, EURI, XUSD, AUSD, BFUSD, USDX ve fiat-benzeri tabanlar otomatik tarama/alım evreninden çıkarılır.
+- Stablecoin filtresi frontend piyasa listesi, Vercel PAPER100 runner ve legacy server market katmanında aynı listeyle uygulanır.
+- Mevcut açık stablecoin pozisyonları zorla kapatılmaz; kullanıcı manuel `Sat` ile kapatabilir.
+
+
+## v1.3.8 - İşlem geçmişi ve net komisyon muhasebesi
+- Kullanıcı kapanan işlemin neden kapandığını her zaman görebilmelidir. İşlem geçmişi arayüzde kalıcı bir karttır.
+- PAPER100 komisyon varsayımı %0,10 alış + %0,10 satıştır.
+- SELL realized_pnl artık giriş ve çıkış komisyonları dahil gerçek net K/Z'dir.
+- paper_positions.invested_usdt açık pozisyonun komisyon dahil kalan maliyet bazıdır; kısmi satışlarda oransal azaltılır.
+- Açık pozisyon K/Z'si tahmini satış komisyonunu da içerir.
+- Kapanış nedenleri (ZARAR_DURDUR, IZ_SUREN_STOP, KAR_AL_1, KAR_AL_2, MANUAL_CLOSE) Türkçe arayüzde açıkça gösterilir.
+- Mevcut eski SELL satırları migration 006 ile %0,10 eski giriş komisyonu varsayımı üzerinden net K/Z'ye düzeltilir.

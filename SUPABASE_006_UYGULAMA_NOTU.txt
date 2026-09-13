@@ -1,0 +1,4 @@
+ÖNCE Supabase SQL Editor içinde supabase/migrations/006_trade_history_accounting.sql dosyasının tamamını çalıştırın.
+Ardından bu proje dosyalarını GitHub kripto reposuna yükleyip main branch'e commit edin.
+Vercel otomatik deploy edecektir.
+Bu migration gerçek Binance emri açmaz; yalnız PAPER100 işlem geçmişi ve komisyon/net K/Z muhasebesini düzeltir.

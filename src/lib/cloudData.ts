@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { AppState, PortfolioItem, TradeSignal } from '../types';
+import type { AppState, PortfolioItem, TradeSignal, TradeHistoryItem } from '../types';
 
 export async function currentUserId(){
   const {data:{user},error}=await supabase.auth.getUser();
@@ -20,12 +20,22 @@ export async function loadPaperState(){
   const portfolio:PortfolioItem[]=(positions||[]).map((p:any)=>({
     symbol:String(p.symbol),amount:Number(p.quantity||0),averageBuyPrice:Number(p.average_entry||0),
     stopLoss:p.stop_loss==null?undefined:Number(p.stop_loss),takeProfit1:p.take_profit_1==null?undefined:Number(p.take_profit_1),takeProfit2:p.take_profit_2==null?undefined:Number(p.take_profit_2),
-    trailingActivation:p.trailing_activation==null?undefined:Number(p.trailing_activation),trailingDistancePct:p.trailing_distance_percent==null?undefined:Number(p.trailing_distance_percent),highestPrice:p.highest_price==null?undefined:Number(p.highest_price),riskAmount:Number(p.risk_amount||0),tp1Hit:p.tp1_hit?1:0,tp2Hit:p.tp2_hit?1:0,
+    trailingActivation:p.trailing_activation==null?undefined:Number(p.trailing_activation),trailingDistancePct:p.trailing_distance_percent==null?undefined:Number(p.trailing_distance_percent),highestPrice:p.highest_price==null?undefined:Number(p.highest_price),riskAmount:Number(p.risk_amount||0),tp1Hit:p.tp1_hit?1:0,tp2Hit:p.tp2_hit?1:0,investedUsdt:Number(p.invested_usdt||0),openedAt:p.opened_at?String(p.opened_at):undefined,
   }));
   const mappedSignals:TradeSignal[]=(signals||[]).map((s:any)=>({
     id:String(s.id),symbol:String(s.symbol),type:s.signal_type==='SELL'?'SELL':'BUY',price:Number(s.price||0),aiScore:Number(s.opportunity||0),analysis:String(s.analysis||''),timestamp:new Date(s.created_at).getTime(),status:s.status,source:s.source||'supabase',opportunity:Number(s.opportunity||0),risk:Number(s.risk||0),confidence:Number(s.confidence||0),
   }));
   return {uid,account,settings,portfolio,signals:mappedSignals};
+}
+
+
+export async function loadTradeHistory(limit=200):Promise<TradeHistoryItem[]>{
+  const uid=await currentUserId();
+  const {data,error}=await supabase.from('trade_history').select('*').eq('user_id',uid).order('created_at',{ascending:false}).limit(limit);
+  if(error)throw error;
+  return (data||[]).map((t:any)=>({
+    id:String(t.id),symbol:String(t.symbol),side:t.side==='SELL'?'SELL':'BUY',quantity:Number(t.quantity||0),price:Number(t.price||0),grossValueUsdt:Number(t.gross_value_usdt||0),feeUsdt:Number(t.fee_usdt||0),realizedPnl:Number(t.realized_pnl||0),reason:String(t.reason||''),primaryStrategy:t.primary_strategy||undefined,marketRegime:t.market_regime||undefined,opportunity:t.opportunity==null?undefined:Number(t.opportunity),risk:t.risk==null?undefined:Number(t.risk),confidence:t.confidence==null?undefined:Number(t.confidence),costBasisUsdt:t.cost_basis_usdt==null?undefined:Number(t.cost_basis_usdt),entryFeeUsdt:t.entry_fee_usdt==null?undefined:Number(t.entry_fee_usdt),netReturnPct:t.net_return_pct==null?undefined:Number(t.net_return_pct),createdAt:String(t.created_at)
+  }));
 }
 
 export function mapSettingsToState(s:any):Partial<AppState>{

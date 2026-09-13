@@ -27,6 +27,8 @@ export interface PortfolioItem {
   riskAmount?: number;
   tp1Hit?: number;
   tp2Hit?: number;
+  investedUsdt?: number;
+  openedAt?: string;
 }
 
 export interface TradeSignal {
@@ -69,8 +71,15 @@ export interface AppState {
   emergencyDrillAttested: boolean;
   testnetReviewAttested: boolean;
   newsRetestAttested: boolean;
+  startingBalance: number;
+  realizedPnl: number;
+  totalFees: number;
 }
 
 export interface MarketRegime { label:string; risk:number; breadth:number; avgChange24h:number; trendScore:number; volatility:number; }
 
 export interface NewsIntelligence { symbol:string; level:'NORMAL'|'INFO'|'CAUTION'|'HIGH_RISK'|'VETO'; reason:string; veto:{active:boolean;reason:string}; score:{sentiment:number;opportunityAdjustment:number;riskAdjustment:number;confidenceAdjustment:number;socialAnomaly:number}; news:Array<{id:string;title:string;source:string;domain:string;publishedAt:number;reliability:number;sentiment:number;impact:number;category:string;confirmations:number;stale:boolean}>; upcomingEvents:Array<{id:string;title:string;date:number;displayedDate:string;impact:number;category:string;provider:string;estimated?:boolean}>; providers:{cryptopanic:boolean;coinmarketcal:boolean;genericNews:boolean;macroConfig:boolean;errors:string[]}; generatedAt:number; }
+
+export interface TradeHistoryItem {
+  id:string; symbol:string; side:'BUY'|'SELL'; quantity:number; price:number; grossValueUsdt:number; feeUsdt:number; realizedPnl:number; reason:string; primaryStrategy?:string; marketRegime?:string; opportunity?:number; risk?:number; confidence?:number; costBasisUsdt?:number; entryFeeUsdt?:number; netReturnPct?:number; createdAt:string;
+}
