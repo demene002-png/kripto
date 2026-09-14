@@ -12,7 +12,7 @@ async function getJson(path){
   const errors=[];
   for(const base of BINANCE_BASES){
     try{
-      const r=await fetch(base+path,{headers:{'User-Agent':'kripto-profesyonel-lab/1.4.0'},signal:AbortSignal.timeout(7000)});
+      const r=await fetch(base+path,{headers:{'User-Agent':'kripto-profesyonel-lab/1.4.1'},signal:AbortSignal.timeout(7000)});
       const t=await r.text();
       const j=JSON.parse(t);
       if(!r.ok)throw new Error(j?.msg||`HTTP ${r.status}`);

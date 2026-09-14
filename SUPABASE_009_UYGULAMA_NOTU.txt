@@ -1,0 +1,2 @@
+Supabase SQL Editor'da supabase/migrations/009_adaptif_kayip_azaltma.sql dosyasini bir kez calistirin.
+Bu migration PAPER100 test ayarlarini daha muhafazakar yapar; gercek Binance emri eklemez.

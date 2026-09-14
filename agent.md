@@ -588,3 +588,16 @@ Kritik proje kararı:
 - Backtest/optimizasyon sonucu doğrudan otomatik ayara uygulanmaz; walk-forward ve PAPER doğrulaması gerekir.
 - Backtestte komisyon %0.10/alım + %0.10/satım ve varsayılan 5 bp kayma dikkate alınır.
 - CryptoPanic opsiyoneldir; maliyet/katkı kararı retest verisine göre verilir.
+
+
+## v1.4.1 KRİTİK KAYIP AZALTMA KURALLARI
+- PAPER doğrulama aşamasında otomatik işlem başına risk sert olarak %0,75 ile sınırlandırılır.
+- Otomatik giriş tabanı 82 skor / 75 güven / maksimum 50 risk.
+- 1h trend hizası zorunludur; 4h RSI zemini ayrıca kontrol edilir.
+- BTC 1h zayıfsa BTC harici yeni alış açılmaz.
+- YATAY rejimde +6 skor, TOPARLANMA rejiminde +2 skor ek kalite gereksinimi uygulanır.
+- Son 12 kapanış en az 6 örnek olduğunda adaptif performans kapısı çalışır: win rate < %45 veya PF < 1 ise +4 skor ve 5/6 oy; çok zayıfsa +8 skor.
+- Aynı sembolde 24 saatte 2 negatif ZARAR_DURDUR varsa sembol 24 saat kilitlidir.
+- Stop sonrası 120 dk, manuel/diğer kapanış sonrası 30 dk tekrar giriş beklenir.
+- Üç ardışık negatif kapanış sonrası 4 saat global yeni alış devre kesicisi uygulanır.
+- Kullanıcıya görünen işlem geçmişinde giriş kalitesi görünür olmalıdır.

@@ -89,3 +89,18 @@ Piyasa ve geçmiş mum verileri Binance public Spot uçlarından alınır. Zorun
 
 ### Kurulum
 Mevcut migration'lara ek olarak `supabase/migrations/008_profesyonel_laboratuvar.sql` dosyasını Supabase SQL Editor'da bir kez çalıştırın. Sonra projeyi Vercel'e deploy edin.
+
+
+## v1.4.1 — Kayıp Azaltma ve Adaptif Giriş Motoru
+
+- Otomatik PAPER işlem başına sert risk tavanı: %0,75.
+- Taban otomatik fırsat skoru 82, güven 75, risk en fazla 50.
+- 1 saatlik ana trend teyidi zorunlu.
+- 4 saatlik zemin kontrolü ve tepeden alma filtresi eklendi.
+- BTC kısa vadede zayıfsa altcoin yeni alışları bekletilir.
+- Yatay piyasada daha yüksek skor gerekir.
+- Son 12 kapanış zayıfsa fırsat skoru ve strateji oy eşiği otomatik sıkılaşır.
+- Aynı coin 24 saatte iki zarar durdur görürse 24 saat yeni alım kilidi uygulanır.
+- Üç ardışık zarar sonrası global bekleme 4 saate çıkarıldı.
+- Zarar durdur sonrası aynı coine tekrar giriş bekleme süresi 120 dakikadır.
+- İşlem geçmişinde her kapanışın hangi giriş skoru/risk/güven/strateji/rejim ile açıldığı görünür.

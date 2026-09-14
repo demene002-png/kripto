@@ -32,13 +32,16 @@ const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // v1.3.9 kalite kapilari: otomatik PAPER islemleri daha secici.
-const AUTO_MIN_OPPORTUNITY = 80;
+const AUTO_MIN_OPPORTUNITY = 82;
 const SHADOW_MIN_OPPORTUNITY = 75;
-const AUTO_MIN_CONFIDENCE = 70;
-const AUTO_MAX_RISK = 55;
+const AUTO_MIN_CONFIDENCE = 75;
+const AUTO_MAX_RISK = 50;
 const AUTO_MIN_CONSENSUS = 2;
-const STOP_COOLDOWN_MINUTES = 60;
+const STOP_COOLDOWN_MINUTES = 120;
 const MANUAL_COOLDOWN_MINUTES = 30;
+const AUTO_HARD_RISK_PER_TRADE_PERCENT = 0.75;
+const PAIR_STOP_LOCK_HOURS = 24;
+
 
 async function retry(label, fn, attempts = 3) {
   let last;
@@ -80,7 +83,7 @@ async function fetchBinanceJson(path, validator, label) {
   for (const base of BINANCE_BASES) {
     try {
       const response = await fetch(`${base}${path}`, {
-        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.4.0' },
+        headers: { 'User-Agent': 'kripto-paper100-cloud-runner/1.4.1' },
         signal: AbortSignal.timeout(4_000),
       });
 
@@ -193,6 +196,10 @@ function score(klines) {
     distanceFromEma9Pct,
     trendAligned,
     entryTimingOk,
+    momentum,
+    lastBarChangePct: closes.length > 1 ? (last / closes.at(-2) - 1) * 100 : 0,
+    threeBarChangePct: closes.length > 3 ? (last / closes.at(-4) - 1) * 100 : 0,
+    ema9Above21Pct: e21 > 0 ? (e9 / e21 - 1) * 100 : 0,
   };
 }
 
@@ -304,6 +311,15 @@ export default async function handler(req, res) {
       .eq('cloud_runner_enabled', true)
       .eq('execution_mode', 'PAPER')); 
 
+    // BTC kısa vadeli zemin: altcoinleri genel piyasa düşüşüne karşı korur.
+    let btcShortWeak = false;
+    try {
+      const btc1h = score(await getKlines('BTCUSDT', '1h'));
+      btcShortWeak = !btc1h.trendAligned && btc1h.rsi < 45 && btc1h.momentum < -0.35;
+    } catch {
+      // BTC verisi alınamazsa sistemi tamamen kilitleme; mevcut rejim kapıları çalışmaya devam eder.
+    }
+
     const cursor = Number(claim.cursor || 0) % all.length;
     let batch = all.slice(cursor, cursor + 5);
     if (batch.length < 5) batch = [...batch, ...all.slice(0, 5 - batch.length)];
@@ -397,6 +413,24 @@ export default async function handler(req, res) {
     }
 
     for (const st of settings || []) {
+      // Son kapanan işlemlerden adaptif kalite kapısı üret. En az 6 kapanış olmadan
+      // eşikleri otomatik değiştirmiyoruz; küçük örnekle aşırı uyumdan kaçınıyoruz.
+      const { data: adaptiveClosedRows } = await sb.from('trade_history')
+        .select('realized_pnl,created_at')
+        .eq('user_id', st.user_id)
+        .eq('side', 'SELL')
+        .order('created_at', { ascending: false })
+        .limit(12);
+      const adaptiveClosed = adaptiveClosedRows || [];
+      const adaptiveWins = adaptiveClosed.filter((x) => Number(x.realized_pnl || 0) > 0);
+      const adaptiveLosses = adaptiveClosed.filter((x) => Number(x.realized_pnl || 0) < 0);
+      const adaptiveGrossProfit = adaptiveWins.reduce((a,x)=>a+Number(x.realized_pnl||0),0);
+      const adaptiveGrossLoss = Math.abs(adaptiveLosses.reduce((a,x)=>a+Number(x.realized_pnl||0),0));
+      const adaptiveStats = {
+        closed: adaptiveClosed,
+        winRate: adaptiveClosed.length ? adaptiveWins.length / adaptiveClosed.length : 0.5,
+        profitFactor: adaptiveGrossLoss > 0 ? adaptiveGrossProfit / adaptiveGrossLoss : (adaptiveGrossProfit > 0 ? 99 : 1),
+      };
       const run = {
         user_id: st.user_id,
         universe_size: all.length,
@@ -472,17 +506,41 @@ export default async function handler(req, res) {
 
           const consensusCount = scores.filter((x) => x.opp >= SHADOW_MIN_OPPORTUNITY).length;
           const trendConsensusCount = scores.filter((x) => x.trendAligned).length;
-          const configuredOpportunity = Math.max(AUTO_MIN_OPPORTUNITY, Number(st.paper_candidate_opportunity || 0));
+          const dayScore = scores[1];
+          const swingScore = scores[2];
+          const recentClosed = adaptiveStats?.closed || [];
+          const adaptiveSampleReady = recentClosed.length >= 6;
+          const recentWinRate = adaptiveStats?.winRate ?? 0.5;
+          const recentProfitFactor = adaptiveStats?.profitFactor ?? 1;
+          const weakRecentPerformance = adaptiveSampleReady && (recentWinRate < 0.45 || recentProfitFactor < 1.0);
+          const veryWeakRecentPerformance = adaptiveSampleReady && (recentWinRate < 0.35 || recentProfitFactor < 0.75);
+          const adaptiveOpportunityBoost = veryWeakRecentPerformance ? 8 : weakRecentPerformance ? 4 : 0;
+          const adaptiveVoteFloor = weakRecentPerformance ? 5 : 4;
+          const regimeOpportunityBoost = regime === 'YATAY' ? 6 : regime === 'TOPARLANMA' ? 2 : 0;
+          const configuredOpportunity = Math.min(96, Math.max(AUTO_MIN_OPPORTUNITY, Number(st.paper_candidate_opportunity || 0)) + adaptiveOpportunityBoost + regimeOpportunityBoost);
           const configuredRisk = Math.min(AUTO_MAX_RISK, Number(st.paper_max_risk || AUTO_MAX_RISK));
           const configuredConfidence = Math.max(AUTO_MIN_CONFIDENCE, Number(st.paper_min_confidence || 0));
+          const btcGate = ticker.symbol === 'BTCUSDT' || !btcShortWeak;
+          const oneHourGate = dayScore.trendAligned
+            && dayScore.rsi >= 49 && dayScore.rsi <= 68
+            && dayScore.volumeRatio >= 0.85
+            && dayScore.ema9Above21Pct > 0;
+          const antiChaseGate = q.threeBarChangePct <= Math.max(2.2, q.atr * 2.2)
+            && q.lastBarChangePct > -0.65
+            && q.distanceFromEma9Pct <= 1.35;
+          const higherTimeframeGate = swingScore.rsi >= 42 && swingScore.rsi <= 72;
 
           const qualityGate = q.opp >= configuredOpportunity
             && q.risk <= configuredRisk
             && q.conf >= configuredConfidence
             && consensusCount >= AUTO_MIN_CONSENSUS
             && trendConsensusCount >= AUTO_MIN_CONSENSUS
-            && ensemble.count >= 4
-            && q.entryTimingOk;
+            && ensemble.count >= adaptiveVoteFloor
+            && q.entryTimingOk
+            && oneHourGate
+            && higherTimeframeGate
+            && antiChaseGate
+            && btcGate;
           const regimeGate = ['GUCLU_BOGA','ZAYIF_BOGA','YATAY','TOPARLANMA'].includes(regime);
           const allowed = qualityGate && regimeGate && !st.safe_mode;
 
@@ -512,7 +570,12 @@ export default async function handler(req, res) {
               ...(q.conf < configuredConfidence ? [`Guven puani ${q.conf}/${configuredConfidence} altinda`] : []),
               ...(consensusCount < AUTO_MIN_CONSENSUS ? ['En az 2 zaman diliminde 75+ mutabakat yok'] : []),
               ...(trendConsensusCount < AUTO_MIN_CONSENSUS ? ['En az 2 zaman diliminde trend hizasi yok'] : []),
-              ...(ensemble.count < 4 ? [`Strateji topluluğu yetersiz: ${ensemble.count}/6 olumlu oy (${ensemble.positive.join(', ') || 'oy yok'})`] : []),
+              ...(ensemble.count < adaptiveVoteFloor ? [`Strateji topluluğu yetersiz: ${ensemble.count}/6 olumlu oy; gereken ${adaptiveVoteFloor}/6 (${ensemble.positive.join(', ') || 'oy yok'})`] : []),
+              ...(!oneHourGate ? [`1 saatlik ana trend teyidi yok (RSI ${dayScore.rsi.toFixed(1)}, hacim x${dayScore.volumeRatio.toFixed(2)})`] : []),
+              ...(!higherTimeframeGate ? [`4 saatlik zemin uygun değil (RSI ${swingScore.rsi.toFixed(1)})`] : []),
+              ...(!antiChaseGate ? [`Tepeden alma koruması aktif (3 mum %${q.threeBarChangePct.toFixed(2)}, EMA9 uzaklık %${q.distanceFromEma9Pct.toFixed(2)})`] : []),
+              ...(!btcGate ? ['BTC kısa vadede zayıf; altcoin yeni alışları geçici kapalı'] : []),
+              ...(weakRecentPerformance ? [`Son performans zayıf: kazanma %${(recentWinRate*100).toFixed(0)}, kâr faktörü ${recentProfitFactor.toFixed(2)}; eşikler sıkılaştırıldı`] : []),
               ...(!q.entryTimingOk ? [`Giris teyidi yok (RSI ${q.rsi.toFixed(1)}, hacim x${q.volumeRatio.toFixed(2)}, EMA9 uzaklik %${q.distanceFromEma9Pct.toFixed(2)})`] : []),
               ...(!regimeGate ? [`${regime} piyasa rejiminde yeni spot alis kapali`] : []),
               ...(st.safe_mode ? ['Guvenli Mod acik'] : []),
@@ -555,7 +618,7 @@ export default async function handler(req, res) {
               ensemble,
               dayKlines,
               quoteVolume: Number(ticker.quoteVolume || 0),
-              rank: q.opp - q.risk / 2 + ensemble.count * 2,
+              rank: q.opp - q.risk / 2 + ensemble.count * 2 + dayScore.opp * 0.08 + swingScore.opp * 0.04,
             };
           }
         } catch (error) {
@@ -585,14 +648,14 @@ export default async function handler(req, res) {
       if (st.automation_mode === 'FULL_AUTO' && !st.safe_mode && best) {
         const dayStart = new Date();
         dayStart.setHours(0, 0, 0, 0);
-        const cooldownStart = new Date(Date.now() - STOP_COOLDOWN_MINUTES * 60_000).toISOString();
-        const pairHistoryStart = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+        const cooldownStart = new Date(Date.now() - 4 * 60 * 60_000).toISOString();
+        const pairHistoryStart = new Date(Date.now() - PAIR_STOP_LOCK_HOURS * 60 * 60_000).toISOString();
         const [{ data: account }, { data: userPositions }, { data: todaySells }, { data: recentSells }, { data: pairSells }] = await Promise.all([
           sb.from('paper_accounts').select('*').eq('user_id', st.user_id).single(),
           sb.from('paper_positions').select('*').eq('user_id', st.user_id),
           sb.from('trade_history').select('realized_pnl,created_at').eq('user_id', st.user_id).eq('side', 'SELL').gte('created_at', dayStart.toISOString()),
           sb.from('trade_history').select('symbol,reason,realized_pnl,created_at').eq('user_id', st.user_id).eq('side', 'SELL').gte('created_at', cooldownStart).order('created_at', { ascending: false }).limit(20),
-          sb.from('trade_history').select('symbol,realized_pnl,created_at').eq('user_id', st.user_id).eq('side', 'SELL').eq('symbol', best.symbol).gte('created_at', pairHistoryStart).order('created_at', { ascending: false }).limit(5),
+          sb.from('trade_history').select('symbol,reason,realized_pnl,created_at').eq('user_id', st.user_id).eq('side', 'SELL').eq('symbol', best.symbol).gte('created_at', pairHistoryStart).order('created_at', { ascending: false }).limit(10),
         ]);
 
         const currentPositions = userPositions || [];
@@ -611,9 +674,10 @@ export default async function handler(req, res) {
 
         const lastThree = (recentSells || []).slice(0, 3);
         const lossStreakBlocked = lastThree.length === 3 && lastThree.every((t) => Number(t.realized_pnl || 0) < 0)
-          && (Date.now() - new Date(lastThree[0].created_at).getTime()) < 60 * 60_000;
+          && (Date.now() - new Date(lastThree[0].created_at).getTime()) < 4 * 60 * 60_000;
 
-        const pairLossLocked = (pairSells || []).length >= 3 && (pairSells || []).reduce((sum,t)=>sum+Number(t.realized_pnl||0),0) < 0;
+        const pairStopLosses = (pairSells || []).filter((t) => t.reason === 'ZARAR_DURDUR' && Number(t.realized_pnl || 0) < 0);
+        const pairLossLocked = pairStopLosses.length >= 2;
         const equityBefore = Number(account.balance) + currentPositions.reduce((sum,p)=>sum+(priceMap.get(p.symbol)||Number(p.average_entry))*Number(p.quantity),0);
         const drawdownPct = Number(account.starting_balance || 100) > 0 ? (Number(account.starting_balance || 100) - equityBefore) / Number(account.starting_balance || 100) * 100 : 0;
         const maxDrawdownBlocked = drawdownPct >= 5;
@@ -635,7 +699,8 @@ export default async function handler(req, res) {
           );
           // ATR tabanli, komisyonu ezmeyecek kadar genis stop.
           const stopPct = clamp(best.q.atr * 1.6 / 100, 0.015, 0.045);
-          const rawRiskBudget = equity * (Number(st.risk_per_trade_percent) / 100);
+          const autoRiskPct = Math.min(Number(st.risk_per_trade_percent || AUTO_HARD_RISK_PER_TRADE_PERCENT), AUTO_HARD_RISK_PER_TRADE_PERCENT);
+          const rawRiskBudget = equity * (autoRiskPct / 100);
           const currentOpenRisk = currentPositions.reduce((sum, p) => sum + Number(p.risk_amount || 0), 0);
           const maxOpenRiskUsd = equity * (Number(st.max_open_risk_percent || 1.75) / 100);
           const remainingOpenRisk = Math.max(0, maxOpenRiskUsd - currentOpenRisk);
@@ -687,7 +752,7 @@ export default async function handler(req, res) {
                 market_regime: regime,
                 status: 'EXECUTED',
                 source: 'cloud-auto-runner',
-                analysis: `Otomatik sanal işlem açıldı. Kalite ${best.q.opp}/100, strateji oyları ${best.ensemble.count}/6 (${best.ensemble.positive.join(', ')}), korelasyon ${maxCorrelation.toFixed(2)}, boyut x${qualitySizeMultiplier.toFixed(2)}, tahmini net R/R ${feeAwareRR.toFixed(2)}, simüle kayma ${slippageBps.toFixed(1)} bp.`,
+                analysis: `Otomatik sanal işlem açıldı. Kalite ${best.q.opp}/100, strateji oyları ${best.ensemble.count}/6 (${best.ensemble.positive.join(', ')}), otomatik risk tavanı %${autoRiskPct.toFixed(2)}, korelasyon ${maxCorrelation.toFixed(2)}, boyut x${qualitySizeMultiplier.toFixed(2)}, tahmini net R/R ${feeAwareRR.toFixed(2)}, simüle kayma ${slippageBps.toFixed(1)} bp.`,
               });
             }
           }
